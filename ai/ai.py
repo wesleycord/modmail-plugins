@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 from core import checks
 from core.models import PermissionLevel
 
-from .client import AIClient, DEFAULT_MODEL
+from .client import AIClient, COMMAND_RESPONSE_FALLBACK, DEFAULT_MODEL
 from .commands import execute_command
 from .conversation import build
 
@@ -120,6 +120,15 @@ class AI(commands.Cog):
                 )
             except Exception:
                 logger.exception("Failed to process AI message %s", message.id)
+                try:
+                    await self.client._run_reply(
+                        COMMAND_RESPONSE_FALLBACK,
+                        thread,
+                        set(self.settings.get("commands", [])),
+                        message,
+                    )
+                except Exception:
+                    logger.exception("Failed to send AI fallback for message %s", message.id)
 
     @commands.group(name="ai", invoke_without_command=True)
     @checks.has_permissions(PermissionLevel.MODERATOR)

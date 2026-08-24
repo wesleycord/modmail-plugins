@@ -100,30 +100,46 @@ class AIClient:
             )
 
         # Reply always happens before close.
+        successful_reply = False
         for call in reply_calls:
             if not thread.channel:
                 break
 
-            await self._run_command(
+            result = await self._run_command(
                 call,
                 thread,
                 allowed,
                 message,
             )
+            successful_reply |= self._command_succeeded(result)
 
         # Close can be used with or without reply.
+        successful_close = False
         for call in close_calls:
             if not thread.channel:
                 break
 
-            await self._run_command(
+            result = await self._run_command(
                 call,
+                thread,
+                allowed,
+                message,
+            )
+            successful_close |= self._command_succeeded(result)
+
+        if not successful_reply and not successful_close and thread.channel:
+            await self._run_reply(
+                COMMAND_RESPONSE_FALLBACK,
                 thread,
                 allowed,
                 message,
             )
 
         return None
+
+    @staticmethod
+    def _command_succeeded(result):
+        return isinstance(result, str) and result.startswith("Command executed:")
 
     @staticmethod
     def _get_command(call):

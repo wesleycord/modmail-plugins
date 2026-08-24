@@ -8,14 +8,9 @@ MAX_MESSAGE_CHARS = 4000
 MAX_HISTORY_MESSAGE_CHARS = 2000
 CONTEXT_INSTRUCTIONS = (
     "CONVERSATION CONTEXT\n"
-    "Entries are chronological: User opened the thread, AI is automated, and "
-    "Staff are moderators. Reconstruct the ongoing task before answering. Use "
-    "earlier goals, questions, answers, facts, decisions, and evidence. A short "
-    "User reply normally answers the latest unanswered AI or Staff question; "
-    "apply it to the existing task instead of restarting.\n\n"
-    "Check the transcript before asking anything. Do not repeat a request for "
-    "information already supplied. AI entries are previous attempts and Staff "
-    "entries are support context. Prefer the newest clear User or Staff fact.\n\n"
+    "Entries are chronological. User opened the thread, AI is automated, and "
+    "Staff are moderators. Use this transcript as background for the current "
+    "message. AI entries are previous attempts; Staff entries are support context.\n\n"
 )
 
 
