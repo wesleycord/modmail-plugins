@@ -62,6 +62,9 @@ class AIClient:
             "model": model,
             "messages": messages,
             "tools": [COMMAND_TOOL],
+            # Thinking models (e.g. qwen3) can burn the whole response on
+            # reasoning and leave `content` empty; force a direct answer.
+            "think": False,
         }
         response = await self.client.chat(**chat_options)
 
@@ -69,6 +72,12 @@ class AIClient:
         calls = self._field(response_message, "tool_calls") or []
         content = self._field(response_message, "content") or ""
         has_content = isinstance(content, str) and bool(content.strip())
+        if not has_content:
+            # Some models still leak the answer into `thinking` even with think=False.
+            thinking = self._field(response_message, "thinking") or ""
+            if isinstance(thinking, str) and thinking.strip():
+                content = thinking.strip()
+                has_content = True
         await self._debug(
             thread,
             settings,
