@@ -44,6 +44,7 @@ class AIClient:
 
             if not assistant.tool_calls:
                 return assistant.content.strip()
+            print(response, "resp")
 
             messages.append(assistant)
 
@@ -59,6 +60,7 @@ class AIClient:
                 )
             )
             for result in results:
+                print(result, "r")
                 messages.append({"role": "tool", "content": result})
 
         return assistant.content.strip() or COMMAND_RESPONSE_FALLBACK

@@ -34,6 +34,7 @@ async def execute_command(command, thread, allowed, message):
         await thread.channel.send("Command denied: it is not on the allowlist")
         return "Command denied: it is not on the allowlist"
     
+    print(command, 10)
     await thread.channel.send(f"Executing: {command}")
 
     bot = thread.bot
