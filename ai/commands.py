@@ -1,65 +1,124 @@
-import copy
+import os
 
-from discord.ext import commands
+from ollama import AsyncClient
 
-COMMAND_TOOL = {
-    "type": "function",
-    "function": {
-        "name": "execute_command",
-        "description": "Run one approved Discord assistant command.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "command": {
-                    "type": "string",
-                    "description": "One command name from the server allowlist.",
-                },
-            },
-            "required": ["command"],
-            "additionalProperties": False,
-        },
-    },
-}
+from .commands import COMMAND_TOOL
+from .prompts import SYSTEM_PROMPT
+
+DEFAULT_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2")
+COMMAND_RESPONSE_FALLBACK = (
+    "I've taken care of that. Is there anything else I can help with?"
+)
 
 
-async def execute_command(command, thread, allowed, message):
-    """Run a command only when its exact name is allowlisted."""
-    if not isinstance(command, str):
-        await thread.channel.send("Command denied: it is not on the allowlist")
-        return "Command denied: it is not on the allowlist"
+class AIClient:
+    """Small Ollama client for chat and approved command execution."""
 
-    command = command.strip().lower()
-    name = command.split(maxsplit=1)[0] if command else ""
-    if command not in allowed and name not in allowed:
-        await thread.channel.send("Command denied: it is not on the allowlist")
-        return "Command denied: it is not on the allowlist"
-    
-    print(command, 10)
-    await thread.channel.send(f"Executing: {command}")
+    def __init__(self, execute_command):
+        url = os.getenv("OLLAMA_URL")
 
-    bot = thread.bot
-    command_message = copy.copy(message)
-    command_message.content = f"{bot.prefix}{command}"
-    command_message.channel = thread.channel
+        if not url:
+            raise RuntimeError("Missing OLLAMA_URL in environment variables")
 
-    context = await bot.get_context(command_message)
-    context.thread = thread
-    if context.command is None:
-        return "Command failed: the bot command was not found"
+        self.client = AsyncClient(host=url.rstrip("/"))
+        self.execute_command = execute_command
 
-    try:
-        command_message.author = bot.user
-        if not await bot.can_run(context, call_once=True):
-            return "Command failed: the bot is not allowed to run it"
+    async def models(self):
+        response = await self.client.list()
+        return [model.model for model in response.models]
 
-        await context.command.invoke(context)
-    except commands.CommandError as error:
-        return f"Command failed: {error}"
-    except Exception as error:
-        bot.logger.exception("AI command failed: %s", command)
-        return f"Command failed: {error}"
+    async def respond(self, conversation, thread, settings, message):
+        system = SYSTEM_PROMPT
 
-    if context.command_failed:
-        return f"Command failed: {command}"
+        if settings.get("prompt"):
+            system += f"\n\nSERVER PROMPT\n{settings['prompt']}"
 
-    return f"Command executed: {command}"
+        messages = [
+            {"role": "system", "content": system},
+            *conversation,
+        ]
+
+        model = settings.get("model") or DEFAULT_MODEL
+
+        # First AI call:
+        # Let the AI decide whether commands need to be executed.
+        response = await self.client.chat(
+            model=model,
+            messages=messages,
+            tools=[COMMAND_TOOL],
+        )
+
+        assistant = response.message
+
+        # The AI decided that no command is necessary.
+        if not assistant.tool_calls:
+            return assistant.content.strip()
+
+        # Preserve the assistant's tool calls in the conversation.
+        messages.append({
+            "role": "assistant",
+            "content": assistant.content or "",
+            "tool_calls": assistant.tool_calls,
+        })
+
+        # Execute commands sequentially in the exact order requested.
+        results = []
+
+        for call in assistant.tool_calls:
+            result = await self._run_command(
+                call,
+                thread,
+                settings["commands"],
+                message,
+            )
+
+            results.append(result)
+
+            # A command may have closed the thread.
+            if not thread.channel:
+                return None
+
+        # Give all command results to the final AI call.
+        for result in results:
+            messages.append({
+                "role": "tool",
+                "content": result,
+            })
+
+        # Final AI call:
+        # No tools are provided, so the AI can only formulate a response.
+        response = await self.client.chat(
+            model=model,
+            messages=messages,
+        )
+
+        content = response.message.content.strip()
+
+        return content or COMMAND_RESPONSE_FALLBACK
+
+    async def _run_command(self, call, thread, allowed, message):
+        arguments = call.function.arguments
+
+        if not isinstance(arguments, dict):
+            return (
+                "Command denied: invalid command arguments. "
+                "Continue responding normally."
+            )
+
+        command = arguments.get("command")
+
+        if not command:
+            return (
+                "Command denied: no command was provided. "
+                "Continue responding normally."
+            )
+
+        return await self.execute_command(
+            command,
+            thread,
+            allowed,
+            message,
+        )
+
+    async def close(self):
+        await self.client._client.aclose()
