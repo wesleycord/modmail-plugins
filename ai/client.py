@@ -92,36 +92,40 @@ class AIClient:
             await thread.channel.send(f"**AI:** {content}")
 
         if not calls:
-            if not has_content:
-                await self._run_reply(
-                    COMMAND_RESPONSE_FALLBACK,
-                    thread,
-                    allowed,
-                    message,
-                )
-                await self._debug(
-                    thread,
-                    settings,
-                    "model returned no tool calls and no content; fallback sent",
-                )
+            await self.execute_command(
+                f"reply {COMMAND_RESPONSE_FALLBACK}",
+                thread,
+                allowed,
+                message,
+            )
+            await self._debug(
+                thread,
+                settings,
+                "model returned no tool calls; fallback sent",
+            )
             return None
 
-        succeeded = False
+        succeeded_user_facing = False
         for call in calls:
             if not thread.channel:
                 break
 
             result = await self._run_command(call, thread, allowed, message)
-            succeeded |= self._command_succeeded(result)
+            if self._command_succeeded(result):
+                name = self._get_command(call).split(maxsplit=1)[0].lower()
+                if name in {"reply", "close"}:
+                    succeeded_user_facing = True
 
-        if not has_content and not succeeded and thread.channel:
-            await self._run_reply(
-                COMMAND_RESPONSE_FALLBACK,
+        if not succeeded_user_facing and thread.channel:
+            await self.execute_command(
+                f"reply {COMMAND_RESPONSE_FALLBACK}",
                 thread,
                 allowed,
                 message,
             )
-            await self._debug(thread, settings, "no command succeeded; fallback sent")
+            await self._debug(
+                thread, settings, "no reply/close command succeeded; fallback sent"
+            )
 
         return None
 
@@ -172,14 +176,6 @@ class AIClient:
 
         return await self.execute_command(
             command,
-            thread,
-            allowed,
-            message,
-        )
-
-    async def _run_reply(self, content, thread, allowed, message):
-        return await self.execute_command(
-            f"reply {content}",
             thread,
             allowed,
             message,
