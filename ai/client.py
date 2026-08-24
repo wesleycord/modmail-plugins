@@ -49,9 +49,11 @@ class AIClient:
         )
 
         assistant = response.message
+        print(response)
 
         # No commands needed.
         if not assistant.tool_calls:
+            print("return first")
             return assistant.content.strip()
 
         # Keep Ollama's original assistant message.
@@ -72,6 +74,7 @@ class AIClient:
 
             # Stop if a command closed the thread.
             if not thread.channel:
+                print("closed thread!!")
                 return None
 
         # Give every command result back to Ollama.
