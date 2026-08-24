@@ -8,9 +8,10 @@ COMMAND_TOOL = {
     "function": {
         "name": "execute_command",
         "description": (
-            "Use this tool to execute a ModMail command. "
-            "In the command formats, <value> means required and [value] means "
-            "optional. Do not include the brackets in the command."
+            "Execute one complete ModMail command. Put the command name first, "
+            "followed by its arguments separated by spaces. <value> means "
+            "required and [value] means optional. Brackets are notation only and "
+            "must not be included in the command."
         ),
         "parameters": {
             "type": "object",
@@ -18,7 +19,12 @@ COMMAND_TOOL = {
                 "command": {
                     "type": "string",
                     "minLength": 1,
-                    "description": "The bot command to execute such as 'reply <message>' or 'close [time] [reason]' for example",
+                    "description": (
+                        "One complete command string, including the command name "
+                        "and any required arguments. Use the exact argument order "
+                        "defined by the ModMail command. Do not add explanations, "
+                        "formatting, or placeholder brackets."
+                    ),
                 },
             },
             "required": ["command"],
