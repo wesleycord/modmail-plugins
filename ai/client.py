@@ -40,11 +40,7 @@ class AIClient:
         response_message = self._field(response, "message")
         calls = self._field(response_message, "tool_calls") or []
         content = self._field(response_message, "content") or ""
-        thinking = self._field(response_message, "thinking") or ""
         content = content.strip() if isinstance(content, str) else ""
-        if not content and isinstance(thinking, str) and thinking.strip():
-            # Some models still leak the answer into `thinking` even with think=False.
-            content = thinking.strip()
         return content, calls, f"{type(response).__name__}/{type(response_message).__name__}"
 
     async def respond(self, conversation, thread, settings, message):
@@ -75,11 +71,12 @@ class AIClient:
             "model": model,
             "messages": messages,
             "tools": [COMMAND_TOOL],
-            "think": True,
+            # Disabled so the model commits directly to a tool call instead of
+            # leaking chain-of-thought reasoning into `content`.
+            "think": False,
         }
         content, calls, response_type = await self._chat(chat_options)
 
-        has_content = bool(content)
         calls = calls[:MAX_TOOL_CALLS] if isinstance(calls, list) else []
         await self._debug(
             thread,
@@ -87,9 +84,6 @@ class AIClient:
             f"model response: {response_type}; content length: {len(content)}; "
             f"tool calls: {len(calls)}",
         )
-
-        if has_content and thread.channel:
-            await thread.channel.send(f"**AI:** {content}")
 
         if not calls:
             await self.execute_command(
