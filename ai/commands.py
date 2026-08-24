@@ -12,8 +12,7 @@ COMMAND_TOOL = {
             "followed by its arguments separated by spaces. <value> means "
             "required and [value] means optional. Brackets are notation only and "
             "must not be included in the command. Use only real command names "
-            "available in the current command list; never invent one. To send a "
-            "normal response, start the command with reply followed by the text."
+            "available in the current command list; never invent one. For a normal "
         ),
         "parameters": {
             "type": "object",
@@ -22,10 +21,10 @@ COMMAND_TOOL = {
                     "type": "string",
                     "minLength": 1,
                     "description": (
-                        "One complete command string, including the command name "
-                        "and any required arguments. Use the exact argument order "
-                        "defined by the ModMail command. Do not add explanations, "
-                        "formatting, or placeholder brackets."
+                        "One complete command string: command name first, followed "
+                        "by its arguments. Use the exact argument order defined by "
+                        "the ModMail command. Do not add explanations or placeholder "
+                        "brackets."
                     ),
                 },
             },
