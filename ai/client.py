@@ -34,6 +34,19 @@ class AIClient:
         if settings.get("debug") and thread.channel:
             await thread.channel.send(f"**AI:** [DEBUG] {text}")
 
+    async def _chat(self, chat_options):
+        """Send one chat request and return (content, tool_calls, response type name)."""
+        response = await self.client.chat(**chat_options)
+        response_message = self._field(response, "message")
+        calls = self._field(response_message, "tool_calls") or []
+        content = self._field(response_message, "content") or ""
+        thinking = self._field(response_message, "thinking") or ""
+        content = content.strip() if isinstance(content, str) else ""
+        if not content and isinstance(thinking, str) and thinking.strip():
+            # Some models still leak the answer into `thinking` even with think=False.
+            content = thinking.strip()
+        return content, calls, f"{type(response).__name__}/{type(response_message).__name__}"
+
     async def respond(self, conversation, thread, settings, message):
         system = SYSTEM_PROMPT
 
@@ -66,28 +79,27 @@ class AIClient:
             # reasoning and leave `content` empty; force a direct answer.
             "think": False,
         }
-        response = await self.client.chat(**chat_options)
+        content, calls, response_type = await self._chat(chat_options)
 
-        response_message = self._field(response, "message")
-        calls = self._field(response_message, "tool_calls") or []
-        content = self._field(response_message, "content") or ""
-        thinking = self._field(response_message, "thinking") or ""
-        has_content = isinstance(content, str) and bool(content.strip())
-        if not has_content and isinstance(thinking, str) and thinking.strip():
-            # Some models still leak the answer into `thinking` even with think=False.
-            content = thinking.strip()
-            has_content = True
+        if not content and not calls:
+            # The model produced nothing at all with tools attached; some
+            # models (e.g. qwen3) go blank when forced into tool-call mode
+            # but answer fine without it. Retry once as a plain chat.
+            await self._debug(
+                thread,
+                settings,
+                "empty response with tools; retrying without tools",
+            )
+            content, calls, response_type = await self._chat(
+                {"model": model, "messages": messages, "think": False}
+            )
+
+        has_content = bool(content)
         await self._debug(
             thread,
             settings,
-            "model response: "
-            f"{type(response).__name__}/{type(response_message).__name__}; "
+            f"model response: {response_type}; content length: {len(content)}; "
             f"raw tool calls: {len(calls) if isinstance(calls, list) else 'invalid'}",
-        )
-        await self._debug(
-            thread,
-            settings,
-            f"raw content: {content[:300]!r}; raw thinking: {thinking[:300]!r}",
         )
 
         if not calls:
@@ -101,7 +113,7 @@ class AIClient:
                     return None
 
                 await self._run_reply(
-                    content.strip(),
+                    content,
                     thread,
                     allowed,
                     message,
@@ -155,12 +167,12 @@ class AIClient:
         )
 
         if has_content and thread.channel:
-            await thread.channel.send(f"**AI:** {content.strip()}")
+            await thread.channel.send(f"**AI:** {content}")
             await self._debug(thread, settings, "content sent with tool command(s)")
 
         if not reply_calls and not close_calls:
             if has_content:
-                await thread.channel.send(f"**AI:** {content.strip()}")
+                await thread.channel.send(f"**AI:** {content}")
                 await self._debug(
                     thread,
                     settings,
