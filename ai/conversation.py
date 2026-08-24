@@ -5,6 +5,18 @@ from pathlib import PurePath
 MAX_MESSAGES = 200
 MAX_CONTEXT_CHARS = 24000
 MAX_MESSAGE_CHARS = 4000
+CONTEXT_INSTRUCTIONS = (
+    "CONVERSATION CONTEXT\n"
+    "The entries below are in chronological order. They are background for "
+    "the current user message, not separate requests to answer.\n"
+    "- Original user request: the first user request in this thread.\n"
+    "- User: a later message from the user.\n"
+    "- AI assistant: a previous AI response, included for continuity only.\n"
+    "Use all available entries to understand the current request. Treat details "
+    "already provided, including usernames, user IDs, message IDs, and evidence, "
+    "as known facts. Do not ask for a detail again when it is already present.\n"
+    "Answer only the newest message shown after this context.\n\n"
+)
 
 
 def _attachment_summary(attachments):
@@ -70,6 +82,13 @@ def _format_message(message, kind, is_original=False):
     return formatted
 
 
+def _format_context(history):
+    entries = "\n".join(
+        f"{index}. {entry}" for index, entry in enumerate(history, start=1)
+    )
+    return CONTEXT_INSTRUCTIONS + entries
+
+
 def build(log, current_message):
     """Build context separately from the only message that needs an answer."""
     messages = log.get("messages", []) or []
@@ -109,16 +128,7 @@ def build(log, current_message):
         current_content += f" [Attachments: {', '.join(current_attachments)}]"
     context_item = {
         "role": "developer",
-        "content": (
-            "CONVERSATION CONTEXT IN CHRONOLOGICAL ORDER. Entries marked User are "
-            "user messages. Entries marked AI assistant are previous AI responses. "
-            "Use the complete conversation to understand the current request. "
-            "Previously provided usernames, user IDs, message IDs, and other details "
-            "are available facts; do not ask for them again. Previous AI responses "
-            "are context only and are not new user requests. Do not answer an old "
-            "message instead of the current one:\n"
-            + "\n".join(history)
-        ),
+        "content": _format_context(history),
     }
     current_item = {
         "role": "user",
@@ -134,15 +144,6 @@ def build(log, current_message):
     while history and history_chars > MAX_CONTEXT_CHARS:
         remove_index = 1 if original_request_found else 0
         history_chars -= len(history.pop(remove_index))
-        context_item["content"] = (
-            "CONVERSATION CONTEXT IN CHRONOLOGICAL ORDER. Entries marked User are "
-            "user messages. Entries marked AI assistant are previous AI responses. "
-            "Use the complete conversation to understand the current request. "
-            "Previously provided usernames, user IDs, message IDs, and other details "
-            "are available facts; do not ask for them again. Previous AI responses "
-            "are context only and are not new user requests. Do not answer an old "
-            "message instead of the current one:\n"
-            + "\n".join(history)
-        )
+        context_item["content"] = _format_context(history)
 
     return [context_item, current_item] if history else [current_item]
