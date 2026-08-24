@@ -78,6 +78,15 @@ class AIClient:
             else:
                 other_calls.append(call)
 
+        if not reply_calls and not close_calls:
+            await self._run_reply(
+                COMMAND_RESPONSE_FALLBACK,
+                thread,
+                allowed,
+                message,
+            )
+            return None
+
         # Execute other commands first.
         for call in other_calls:
             if not thread.channel:
@@ -109,15 +118,6 @@ class AIClient:
 
             await self._run_command(
                 call,
-                thread,
-                allowed,
-                message,
-            )
-
-        # Ensure every response produces a user-facing action.
-        if not reply_calls and not close_calls and thread.channel:
-            await self._run_reply(
-                COMMAND_RESPONSE_FALLBACK,
                 thread,
                 allowed,
                 message,
