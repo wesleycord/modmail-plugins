@@ -8,11 +8,13 @@ COMMAND_TOOL = {
     "function": {
         "name": "execute_command",
         "description": (
-            "Execute an approved Discord Modmail command. "
-            "You MUST use this tool to perform actions and to reply to the user. "
-            "You MUST execute exactly one reply command. "
-            "The reply command should contain the complete response to the user. "
-            "If closing the thread, the reply must happen before the close command."
+            "Execute a ModMail command. "
+            "For every user message, execute at least one user-facing command: "
+            "reply or close. "
+            "reply and close are always allowed and may both be used. "
+            "If both are used, reply must come before close. "
+            "Other commands are only allowed when they are present in the "
+            "server command allowlist."
         ),
         "parameters": {
             "type": "object",
@@ -20,12 +22,22 @@ COMMAND_TOOL = {
                 "command": {
                     "type": "string",
                     "description": (
-                        "The complete Modmail command to execute. "
-                        "For a user response, use: "
-                        "'reply <message>'. "
-                        "For example: "
-                        "'reply Hi! How can I help you today?'. "
-                        "Do not merely describe what should be done."
+                        "The complete ModMail command. "
+                        "Use one of these formats:\n"
+                        "- reply <response>\n"
+                        "- close\n"
+                        "- close <time>\n"
+                        "- close <reason>\n"
+                        "- close <time> <reason>\n\n"
+                        "For close, time and reason are both optional and "
+                        "can be provided independently. "
+                        "Time uses durations such as 5h30m.\n\n"
+                        "Examples:\n"
+                        "reply Thanks for the report!\n"
+                        "close\n"
+                        "close 5h30m\n"
+                        "close No further information was provided\n"
+                        "close 5h30m No further information was provided"
                     ),
                 },
             },
@@ -37,27 +49,22 @@ COMMAND_TOOL = {
 
 
 async def execute_command(command, thread, allowed, message):
-    """Run a command when it is allowlisted."""
+    """Run an AI command when it is allowed."""
 
     if not isinstance(command, str):
-        await thread.channel.send(
-            "Command denied: it is not on the allowlist"
-        )
-        return "Command denied: it is not on the allowlist"
+        return "Command denied: invalid command"
 
     command = command.strip()
 
-    name = command.split(maxsplit=1)[0].lower() if command else ""
-
-    # Reply is ALWAYS allowed and cannot be removed from the allowlist.
-    if name != "reply" and command not in allowed and name not in allowed:
-        await thread.channel.send(
-            "Command denied: it is not on the allowlist"
-        )
-        return "Command denied: it is not on the allowlist"
-
     if not command:
         return "Command failed: no command was provided"
+
+    name = command.split(maxsplit=1)[0].lower()
+
+    # These commands are always available to the AI.
+    if name not in {"reply", "close"}:
+        if command not in allowed and name not in allowed:
+            return "Command denied: it is not on the allowlist"
 
     await thread.channel.send(f"Executing: {command}")
 

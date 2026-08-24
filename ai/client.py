@@ -1,199 +1,104 @@
-import os
+import copy
 
-from ollama import AsyncClient
-
-from .commands import COMMAND_TOOL
-from .prompts import SYSTEM_PROMPT
-
-DEFAULT_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2")
-COMMAND_RESPONSE_FALLBACK = (
-    "I've taken care of that. Is there anything else I can help with?"
-)
+from discord.ext import commands
 
 
-class AIClient:
-    """Ollama client for AI-driven Modmail command execution."""
+COMMAND_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "execute_command",
+        "description": (
+            "Execute a ModMail command. "
+            "For every user message, execute at least one user-facing command: "
+            "reply or close. "
+            "reply and close are always allowed and may both be used. "
+            "If both are used, reply must come before close. "
+            "Other commands are only allowed when they are present in the "
+            "server command allowlist."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "command": {
+                    "type": "string",
+                    "description": (
+                        "The complete ModMail command. "
+                        "Use one of these formats:\n"
+                        "- reply <response>\n"
+                        "- close\n"
+                        "- close <time>\n"
+                        "- close <reason>\n"
+                        "- close <time> <reason>\n\n"
+                        "For close, time and reason are both optional and "
+                        "can be provided independently. "
+                        "Time uses durations such as 5h30m.\n\n"
+                        "Examples:\n"
+                        "reply Thanks for the report!\n"
+                        "close\n"
+                        "close 5h30m\n"
+                        "close No further information was provided\n"
+                        "close 5h30m No further information was provided"
+                    ),
+                },
+            },
+            "required": ["command"],
+            "additionalProperties": False,
+        },
+    },
+}
 
-    def __init__(self, execute_command):
-        url = os.getenv("OLLAMA_URL")
 
-        if not url:
-            raise RuntimeError("Missing OLLAMA_URL in environment variables")
+async def execute_command(command, thread, allowed, message):
+    """Run an AI command when it is allowed."""
 
-        self.client = AsyncClient(host=url.rstrip("/"))
-        self.execute_command = execute_command
+    if not isinstance(command, str):
+        return "Command denied: invalid command"
 
-    async def models(self):
-        response = await self.client.list()
-        return [model.model for model in response.models]
+    command = command.strip()
 
-    async def respond(self, conversation, thread, settings, message):
-        system = SYSTEM_PROMPT
+    if not command:
+        return "Command failed: no command was provided"
 
-        if settings.get("prompt"):
-            system += f"\n\nSERVER PROMPT\n{settings['prompt']}"
+    name = command.split(maxsplit=1)[0].lower()
 
-        messages = [
-            {"role": "system", "content": system},
-            *conversation,
-        ]
+    # These commands are always available to the AI.
+    if name not in {"reply", "close"}:
+        if command not in allowed and name not in allowed:
+            return "Command denied: it is not on the allowlist"
 
-        model = settings.get("model") or DEFAULT_MODEL
+    await thread.channel.send(f"Executing: {command}")
 
-        # "reply" is always allowed regardless of server settings.
-        allowed = set(settings.get("commands", []))
-        allowed.add("reply")
+    bot = thread.bot
 
-        print("AI call")
+    command_message = copy.copy(message)
+    command_message.content = f"{bot.prefix}{command}"
+    command_message.channel = thread.channel
 
-        # There is exactly ONE AI call.
-        response = await self.client.chat(
-            model=model,
-            messages=messages,
-            tools=[COMMAND_TOOL],
-        )
+    context = await bot.get_context(command_message)
+    context.thread = thread
 
-        assistant = response.message
+    if context.command is None:
+        return f"Command failed: {command} — command was not found"
 
-        print(response)
+    try:
+        command_message.author = bot.user
 
-        # The AI is required to use a tool.
-        # If it somehow doesn't, send the fallback through the reply command.
-        if not assistant.tool_calls:
-            print("AI did not use a tool, sending fallback reply")
-
-            await self._run_reply(
-                COMMAND_RESPONSE_FALLBACK,
-                thread,
-                allowed,
-                message,
+        if not await bot.can_run(context, call_once=True):
+            return (
+                f"Command failed: {command} — "
+                "bot is not allowed to run it"
             )
 
-            return None
+        await context.command.invoke(context)
 
-        # Extract the requested commands.
-        calls = assistant.tool_calls
+    except commands.CommandError as error:
+        return f"Command failed: {command} — {error}"
 
-        # Only one reply is allowed.
-        reply_call = None
-        other_calls = []
+    except Exception as error:
+        bot.logger.exception("AI command failed: %s", command)
+        return f"Command failed: {command} — {error}"
 
-        for call in calls:
-            arguments = call.function.arguments
+    if context.command_failed:
+        return f"Command failed: {command}"
 
-            if not isinstance(arguments, dict):
-                continue
-
-            command = arguments.get("command")
-
-            if not isinstance(command, str):
-                continue
-
-            command = command.strip()
-
-            if not command:
-                continue
-
-            name = command.split(maxsplit=1)[0].lower()
-
-            if name == "reply":
-                if reply_call is None:
-                    reply_call = call
-                else:
-                    # Ignore additional reply commands.
-                    continue
-            else:
-                other_calls.append(call)
-
-        # Find commands that close the thread.
-        close_calls = []
-        normal_calls = []
-
-        for call in other_calls:
-            arguments = call.function.arguments
-
-            command = arguments.get("command", "")
-            name = command.split(maxsplit=1)[0].lower()
-
-            if name == "close":
-                close_calls.append(call)
-            else:
-                normal_calls.append(call)
-
-        # Execute normal commands first.
-        for call in normal_calls:
-            if not thread.channel:
-                break
-
-            await self._run_command(
-                call,
-                thread,
-                allowed,
-                message,
-            )
-
-        # The reply MUST happen before close.
-        if reply_call is not None and thread.channel:
-            await self._run_command(
-                reply_call,
-                thread,
-                allowed,
-                message,
-            )
-
-        elif thread.channel:
-            # The model failed to provide a reply.
-            # Always provide one anyway.
-            print("AI did not provide reply command, using fallback")
-
-            await self._run_reply(
-                COMMAND_RESPONSE_FALLBACK,
-                thread,
-                allowed,
-                message,
-            )
-
-        # Close only after the reply has been sent.
-        for call in close_calls:
-            if not thread.channel:
-                break
-
-            await self._run_command(
-                call,
-                thread,
-                allowed,
-                message,
-            )
-
-        return None
-
-    async def _run_command(self, call, thread, allowed, message):
-        arguments = call.function.arguments
-
-        if not isinstance(arguments, dict):
-            return "Command failed: invalid command arguments."
-
-        command = arguments.get("command")
-
-        if not isinstance(command, str) or not command.strip():
-            return "Command failed: no command was provided."
-
-        return await self.execute_command(
-            command,
-            thread,
-            allowed,
-            message,
-        )
-
-    async def _run_reply(self, content, thread, allowed, message):
-        command = f"reply {content}"
-
-        return await self.execute_command(
-            command,
-            thread,
-            allowed,
-            message,
-        )
-
-    async def close(self):
-        await self.client._client.aclose()
+    return f"Command executed: {command}"

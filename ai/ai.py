@@ -154,8 +154,6 @@ class AI(commands.Cog):
         lines = [
             f"Model: `{self.settings['model']}`",
             f"Default for new threads: **{'on' if self.settings['ai_default'] else 'off'}**",
-            f"Prompt: {'set (' + str(len(prompt)) + ' chars)' if prompt else 'not set'}",
-            "Allowed commands: " + (", ".join(self.settings["commands"]) or "none"),
         ]
 
         log = await self.bot.api.get_log(ctx.channel.id)
