@@ -7,6 +7,7 @@ from .prompts import SYSTEM_PROMPT
 
 DEFAULT_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2")
 MAX_TOOL_CALLS = 2
+COMMAND_RESPONSE_FALLBACK = "I've taken care of that. Is there anything else I can help with?"
 
 
 class AIClient:
@@ -49,7 +50,7 @@ class AIClient:
                 result = await self._run_command(call, thread, settings["commands"], message)
                 messages.append({"role": "tool", "content": result})
 
-        return assistant.content.strip()
+        return assistant.content.strip() or COMMAND_RESPONSE_FALLBACK
 
     async def _run_command(self, call, thread, allowed, message):
         arguments = call.function.arguments
