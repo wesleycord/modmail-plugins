@@ -35,12 +35,16 @@ class AIClient:
             await thread.channel.send(f"**AI:** [DEBUG] {text}")
 
     async def _chat(self, chat_options):
-        """Send one chat request and return (commands, response type name)."""
+        """Send one chat request and return (commands, raw content, response type name)."""
         response = await self.client.chat(**chat_options)
         response_message = self._field(response, "message")
         content = self._field(response_message, "content") or ""
         content = content.strip() if isinstance(content, str) else ""
-        return self._parse_commands(content), f"{type(response).__name__}/{type(response_message).__name__}"
+        return (
+            self._parse_commands(content),
+            content,
+            f"{type(response).__name__}/{type(response_message).__name__}",
+        )
 
     @staticmethod
     def _parse_commands(content):
@@ -97,7 +101,7 @@ class AIClient:
             # instead of chain-of-thought reasoning.
             "think": True,
         }
-        commands, response_type = await self._chat(chat_options)
+        commands, content, response_type = await self._chat(chat_options)
         commands = commands[:MAX_TOOL_CALLS]
 
         await self._debug(
@@ -105,6 +109,7 @@ class AIClient:
             settings,
             f"model response: {response_type}; commands: {len(commands)}",
         )
+        await self._debug(thread, settings, f"raw response: {content!r}")
 
         if not commands:
             await self.execute_command(
@@ -126,6 +131,7 @@ class AIClient:
                 break
 
             result = await self._run_command(command, thread, allowed, message)
+            await self._debug(thread, settings, f"command {command!r} -> {result!r}")
             if self._command_succeeded(result):
                 name = command.split(maxsplit=1)[0].lower()
                 if name in {"reply", "close"}:
