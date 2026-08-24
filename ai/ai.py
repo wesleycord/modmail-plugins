@@ -106,13 +106,17 @@ class AI(commands.Cog):
                 self.bot.logger.exception("Failed to process AI message %s", message.id)
 
     @commands.group(name="ai", invoke_without_command=True)
+    @checks.has_permissions(PermissionLevel.MODERATOR)
     @commands.guild_only()
     async def ai(self, ctx):
         """
         Manage the AI assistant.
 
-        Toggle AI for the current thread (moderators):
-        - `{prefix}ai toggle`
+        Enable or disable AI for the current thread (moderators):
+        - `{prefix}ai on`
+        - `{prefix}ai off`
+        - `{prefix}ai enable`
+        - `{prefix}ai disable`
 
         View or change the server prompt:
         - `{prefix}ai prompt`
@@ -202,32 +206,52 @@ class AI(commands.Cog):
         await self._save()
         await ctx.send(f"AI model set to `{value}`")
 
-    @ai.command(name="toggle")
-    @checks.has_permissions(PermissionLevel.MODERATOR)
-    @checks.thread_only()
-    async def toggle(self, ctx):
-        """Toggle AI responses for the current thread."""
+    async def _set_thread_ai(self, ctx, enabled):
         log = await self.bot.api.get_log(ctx.channel.id)
         if not log:
             return await ctx.send("No log found for this thread")
 
-        enabled = not bool(log and log.get("ai", self.settings["ai_default"]))
         await self.bot.api.logs.update_one(
             {"channel_id": str(ctx.channel.id)},
             {"$set": {"ai": enabled}},
         )
         await ctx.send(f"AI {'enabled' if enabled else 'disabled'} for this thread")
 
-    @ai.command(name="default")
-    @checks.has_permissions(PermissionLevel.OWNER)
-    async def ai_default(self, ctx, value: str.lower):
-        """Set whether AI starts enabled in new threads."""
-        if value not in ("on", "off"):
-            return await ctx.send("Use `ai default on` or `ai default off`")
+    @ai.command(name="on", aliases=["enable"])
+    @checks.has_permissions(PermissionLevel.MODERATOR)
+    @checks.thread_only()
+    async def ai_on(self, ctx):
+        """Enable AI responses for the current thread."""
+        await self._set_thread_ai(ctx, True)
 
-        self.settings["ai_default"] = value == "on"
+    @ai.command(name="off", aliases=["disable"])
+    @checks.has_permissions(PermissionLevel.MODERATOR)
+    @checks.thread_only()
+    async def ai_off(self, ctx):
+        """Disable AI responses for the current thread."""
+        await self._set_thread_ai(ctx, False)
+
+    @ai.group(name="default", invoke_without_command=True)
+    @checks.has_permissions(PermissionLevel.OWNER)
+    async def ai_default(self, ctx):
+        """Configure whether AI starts enabled in new threads."""
+        await ctx.send_help(ctx.command)
+
+    async def _set_default(self, enabled):
+        self.settings["ai_default"] = enabled
         await self._save()
-        await ctx.send(f"AI is {value} by default")
+
+    @ai_default.command(name="on", aliases=["enable"])
+    async def ai_default_on(self, ctx):
+        """Start AI enabled in new threads."""
+        await self._set_default(True)
+        await ctx.send("AI is on by default")
+
+    @ai_default.command(name="off", aliases=["disable"])
+    async def ai_default_off(self, ctx):
+        """Start AI disabled in new threads."""
+        await self._set_default(False)
+        await ctx.send("AI is off by default")
 
     async def _run_command(self, command, thread, allowed, message):
         from .commands import execute_command
