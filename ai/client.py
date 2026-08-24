@@ -30,6 +30,10 @@ class AIClient:
         response = await self.client.list()
         return [model.model for model in response.models]
 
+    async def _debug(self, thread, settings, text):
+        if settings.get("debug") and thread.channel:
+            await thread.channel.send(f"AI debug: {text}")
+
     async def respond(self, conversation, thread, settings, message):
         system = SYSTEM_PROMPT
 
@@ -43,6 +47,11 @@ class AIClient:
 
         model = settings.get("model") or DEFAULT_MODEL
         allowed = set(settings.get("commands", []))
+        await self._debug(
+            thread,
+            settings,
+            f"request started using {model}; context messages: {len(conversation)}",
+        )
 
         response = await self.client.chat(
             model=model,
@@ -52,6 +61,11 @@ class AIClient:
 
         response_message = getattr(response, "message", None)
         calls = getattr(response_message, "tool_calls", None) or []
+        await self._debug(
+            thread,
+            settings,
+            f"model returned {len(calls)} tool call(s)",
+        )
 
         if not calls:
             assistant_text = getattr(response_message, "content", "") or ""
@@ -62,6 +76,7 @@ class AIClient:
                     allowed,
                     message,
                 )
+                await self._debug(thread, settings, "text response sent")
                 return None
 
             await self._run_reply(
@@ -70,6 +85,7 @@ class AIClient:
                 allowed,
                 message,
             )
+            await self._debug(thread, settings, "empty model response; fallback sent")
             return None
 
         reply_calls = []
@@ -98,6 +114,7 @@ class AIClient:
                 allowed,
                 message,
             )
+            await self._debug(thread, settings, "no valid command; fallback sent")
             return None
 
         # Execute other commands first.
@@ -124,6 +141,7 @@ class AIClient:
                 allowed,
                 message,
             )
+            await self._debug(thread, settings, f"reply result: {result}")
             successful_reply |= self._command_succeeded(result)
 
         # Close can be used with or without reply.
@@ -138,6 +156,7 @@ class AIClient:
                 allowed,
                 message,
             )
+            await self._debug(thread, settings, f"close result: {result}")
             successful_close |= self._command_succeeded(result)
 
         if not successful_reply and not successful_close and thread.channel:
@@ -147,6 +166,7 @@ class AIClient:
                 allowed,
                 message,
             )
+            await self._debug(thread, settings, "all user-facing commands failed; fallback sent")
 
         return None
 

@@ -22,6 +22,7 @@ DEFAULT_SETTINGS = {
     "model": DEFAULT_MODEL,
     "ai_default": True,
     "include_ai_context": True,
+    "debug": False,
 }
 
 
@@ -40,6 +41,7 @@ class AI(commands.Cog):
             "model": DEFAULT_SETTINGS["model"],
             "ai_default": DEFAULT_SETTINGS["ai_default"],
             "include_ai_context": DEFAULT_SETTINGS["include_ai_context"],
+            "debug": DEFAULT_SETTINGS["debug"],
         }
         self.client = AIClient(execute_command)
         self.locks = defaultdict(asyncio.Lock)
@@ -54,6 +56,7 @@ class AI(commands.Cog):
                 "model": DEFAULT_SETTINGS["model"],
                 "ai_default": DEFAULT_SETTINGS["ai_default"],
                 "include_ai_context": DEFAULT_SETTINGS["include_ai_context"],
+                "debug": DEFAULT_SETTINGS["debug"],
             }
             await self._save()
 
@@ -63,6 +66,7 @@ class AI(commands.Cog):
         self.settings["include_ai_context"] = bool(
             self.settings.get("include_ai_context", True)
         )
+        self.settings["debug"] = bool(self.settings.get("debug", False))
         commands = self.settings.get("commands", [])
         if not isinstance(commands, list):
             commands = []
@@ -135,6 +139,8 @@ class AI(commands.Cog):
                     )
             except Exception:
                 logger.exception("Failed to process AI message %s", message.id)
+                if self.settings.get("debug") and thread.channel:
+                    await thread.channel.send("AI debug: response processing failed; check bot logs.")
                 try:
                     await self.client._run_reply(
                         COMMAND_RESPONSE_FALLBACK,
@@ -194,6 +200,7 @@ class AI(commands.Cog):
             f"Model: `{self.settings['model']}`",
             f"Default for new threads: **{'on' if self.settings['ai_default'] else 'off'}**",
             f"Previous AI context: **{'on' if self.settings['include_ai_context'] else 'off'}**",
+            f"AI debug: **{'on' if self.settings['debug'] else 'off'}**",
         ]
 
         log = await self.bot.api.get_log(ctx.channel.id)
@@ -354,6 +361,29 @@ class AI(commands.Cog):
         """Exclude previous AI responses from conversation context."""
         await self._set_ai_context(False)
         await ctx.send("Previous AI responses will be excluded from context")
+
+    @ai.group(name="debug", invoke_without_command=True)
+    @checks.has_permissions(PermissionLevel.OWNER)
+    async def ai_debug(self, ctx):
+        """Configure diagnostic messages in the thread channel."""
+        state = "on" if self.settings["debug"] else "off"
+        await ctx.send(f"AI debug is currently **{state}**. Use `ai debug on` or `ai debug off`.")
+
+    async def _set_debug(self, enabled):
+        self.settings["debug"] = enabled
+        await self._save()
+
+    @ai_debug.command(name="on", aliases=["enable"])
+    @checks.has_permissions(PermissionLevel.OWNER)
+    async def ai_debug_on(self, ctx):
+        await self._set_debug(True)
+        await ctx.send("AI debug enabled")
+
+    @ai_debug.command(name="off", aliases=["disable"])
+    @checks.has_permissions(PermissionLevel.OWNER)
+    async def ai_debug_off(self, ctx):
+        await self._set_debug(False)
+        await ctx.send("AI debug disabled")
 
     async def _run_command(self, command, thread, allowed, message):
         from .commands import execute_command
