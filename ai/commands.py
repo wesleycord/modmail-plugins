@@ -75,7 +75,6 @@ async def execute_command(command, thread, allowed, message):
 
     command_message = copy.copy(message)
     command_message.content = f"{bot.prefix}{command}"
-    command_message.guild = getattr(thread.channel, "guild", None)
     command_message.attachments = []
     command_message.embeds = []
     command_message.stickers = []

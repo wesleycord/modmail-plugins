@@ -50,9 +50,20 @@ class AIClient:
             tools=[COMMAND_TOOL],
         )
 
-        calls = response.message.tool_calls or []
+        response_message = getattr(response, "message", None)
+        calls = getattr(response_message, "tool_calls", None) or []
 
         if not calls:
+            assistant_text = getattr(response_message, "content", "") or ""
+            if isinstance(assistant_text, str) and assistant_text.strip():
+                await self._run_reply(
+                    assistant_text.strip(),
+                    thread,
+                    allowed,
+                    message,
+                )
+                return None
+
             await self._run_reply(
                 COMMAND_RESPONSE_FALLBACK,
                 thread,
