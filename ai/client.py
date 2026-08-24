@@ -75,168 +75,53 @@ class AIClient:
             "model": model,
             "messages": messages,
             "tools": [COMMAND_TOOL],
-            # Thinking models (e.g. qwen3) can burn the whole response on
-            # reasoning and leave `content` empty; force a direct answer.
-            "think": False,
+            "think": True,
         }
         content, calls, response_type = await self._chat(chat_options)
 
-        if not content and not calls:
-            # The model produced nothing at all with tools attached; some
-            # models (e.g. qwen3) go blank when forced into tool-call mode
-            # but answer fine without it. Retry once as a plain chat.
-            await self._debug(
-                thread,
-                settings,
-                "empty response with tools; retrying without tools",
-            )
-            content, calls, response_type = await self._chat(
-                {"model": model, "messages": messages, "think": False}
-            )
-
         has_content = bool(content)
+        calls = calls[:MAX_TOOL_CALLS] if isinstance(calls, list) else []
         await self._debug(
             thread,
             settings,
             f"model response: {response_type}; content length: {len(content)}; "
-            f"raw tool calls: {len(calls) if isinstance(calls, list) else 'invalid'}",
-        )
-
-        if not calls:
-            if has_content:
-                if not thread.channel:
-                    await self._debug(
-                        thread,
-                        settings,
-                        "thread is closed; normal model response was not sent",
-                    )
-                    return None
-
-                await self._run_reply(
-                    content,
-                    thread,
-                    allowed,
-                    message,
-                )
-                await self._debug(thread, settings, "normal model response sent as reply command")
-                return None
-
-            await self._run_reply(
-                COMMAND_RESPONSE_FALLBACK,
-                thread,
-                allowed,
-                message,
-            )
-            await self._debug(
-                thread,
-                settings,
-                "model returned no tool calls; fallback tool command sent",
-            )
-            return None
-
-        reply_calls = []
-        close_calls = []
-        other_calls = []
-        parsed_commands = []
-
-        valid_calls = 0
-        for call in calls[:MAX_TOOL_CALLS] if isinstance(calls, list) else []:
-            command = self._get_command(call)
-
-            if not command:
-                continue
-            valid_calls += 1
-
-            name = command.split(maxsplit=1)[0].lower()
-            parsed_commands.append(name)
-
-            if name == "reply":
-                reply_calls.append(call)
-            elif name == "close":
-                close_calls.append(call)
-            else:
-                other_calls.append(call)
-
-        await self._debug(
-            thread,
-            settings,
-            f"parsed {valid_calls} valid command(s): "
-            f"{len(reply_calls)} reply, {len(close_calls)} close, "
-            f"{len(other_calls)} other; commands: "
-            f"{', '.join(parsed_commands) or 'none'}",
+            f"tool calls: {len(calls)}",
         )
 
         if has_content and thread.channel:
             await thread.channel.send(f"**AI:** {content}")
-            await self._debug(thread, settings, "content sent with tool command(s)")
 
-        if not reply_calls and not close_calls:
-            if has_content:
-                await thread.channel.send(f"**AI:** {content}")
+        if not calls:
+            if not has_content:
+                await self._run_reply(
+                    COMMAND_RESPONSE_FALLBACK,
+                    thread,
+                    allowed,
+                    message,
+                )
                 await self._debug(
                     thread,
                     settings,
-                    "content sent; no valid user-facing tool command",
+                    "model returned no tool calls and no content; fallback sent",
                 )
-                return None
-
-            await self._run_reply(
-                COMMAND_RESPONSE_FALLBACK,
-                thread,
-                allowed,
-                message,
-            )
-            await self._debug(thread, settings, "no valid command; fallback sent")
             return None
 
-        # Execute other commands first.
-        for call in other_calls:
+        succeeded = False
+        for call in calls:
             if not thread.channel:
                 break
 
-            await self._run_command(
-                call,
-                thread,
-                allowed,
-                message,
-            )
+            result = await self._run_command(call, thread, allowed, message)
+            succeeded |= self._command_succeeded(result)
 
-        # Reply always happens before close.
-        successful_reply = False
-        for call in reply_calls:
-            if not thread.channel:
-                break
-
-            result = await self._run_command(
-                call,
-                thread,
-                allowed,
-                message,
-            )
-            successful_reply |= self._command_succeeded(result)
-
-        # Close can be used with or without reply.
-        successful_close = False
-        for call in close_calls:
-            if not thread.channel:
-                break
-
-            result = await self._run_command(
-                call,
-                thread,
-                allowed,
-                message,
-            )
-            successful_close |= self._command_succeeded(result)
-
-        if not has_content and not successful_reply and not successful_close and thread.channel:
+        if not has_content and not succeeded and thread.channel:
             await self._run_reply(
                 COMMAND_RESPONSE_FALLBACK,
                 thread,
                 allowed,
                 message,
             )
-            await self._debug(thread, settings, "all user-facing commands failed; fallback sent")
+            await self._debug(thread, settings, "no command succeeded; fallback sent")
 
         return None
 
