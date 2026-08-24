@@ -91,7 +91,6 @@ async def execute_command(command, thread, allowed, message):
 
     bot = thread.bot
 
-    print(1011, thread.channel.guild, 1011)
     command_message = copy.copy(message)
     command_message.content = f"{bot.prefix}{command}"
     command_message.guild = getattr(thread.channel, "guild", None)
@@ -99,7 +98,6 @@ async def execute_command(command, thread, allowed, message):
     command_message.embeds = []
     command_message.stickers = []
     command_message.message_snapshots = []
-    command_message.channel = thread.channel
 
     context = await bot.get_context(command_message)
     context.thread = thread
