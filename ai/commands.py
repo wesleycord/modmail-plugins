@@ -26,6 +26,34 @@ COMMANDS_SCHEMA = {
     "additionalProperties": False,
 }
 
+COMMAND_INSTRUCTIONS = """
+RESPONSE FORMAT
+Respond with exactly one JSON object: {"commands": ["<command>", ...]}. List
+one or more complete commands to run in order. Output nothing else — no
+prose, no explanation, no text outside the JSON object.
+
+At least one command must be `reply` or `close`. Only use command names
+exactly as listed under AVAILABLE COMMAND NAMES below; inventing a command
+(e.g. "ask", "report_user") is rejected and wastes the response. `reply`
+always needs real text after it (e.g. "reply Thanks for reaching out!");
+never send `reply` alone.
+
+Default to `reply`. Only use `close` when the user clearly confirms the
+issue is resolved or needs no further help, or is abusive/off-topic with
+nothing left to assist with. A greeting or ordinary message is never a
+reason to close by itself.
+"""
+
+
+def build_command_prompt(available_commands):
+    """Command-response instructions plus the current command allowlist."""
+    return (
+        COMMAND_INSTRUCTIONS
+        + "\nAVAILABLE COMMAND NAMES\n"
+        + ", ".join(available_commands)
+        + "\nUse only these command names. Never invent a command name."
+    )
+
 
 async def execute_command(command, thread, allowed, message):
     """Run an AI command when it is allowed."""

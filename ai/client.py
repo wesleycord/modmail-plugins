@@ -3,7 +3,7 @@ import json
 
 from ollama import AsyncClient
 
-from .commands import COMMANDS_SCHEMA
+from .commands import COMMANDS_SCHEMA, build_command_prompt
 from .prompts import SYSTEM_PROMPT
 
 DEFAULT_MODEL = os.getenv("OLLAMA_MODEL", "qwen3:8b")
@@ -78,11 +78,7 @@ class AIClient:
         model = settings.get("model") or DEFAULT_MODEL
         allowed = set(settings.get("commands", []))
         available_commands = sorted({"reply", "close", *allowed})
-        system += (
-            "\n\nAVAILABLE COMMAND NAMES\n"
-            + ", ".join(available_commands)
-            + "\nUse only these command names. Never invent a command name."
-        )
+        system += "\n\n" + build_command_prompt(available_commands)
         messages = [
             {"role": "system", "content": system},
             *conversation,
