@@ -116,7 +116,7 @@ async def execute_command(command, thread, allowed, message):
                 "bot is not allowed to run it"
             )
 
-        await context.command.invoke(context)
+        await bot.invoke(context)
 
     except commands.CommandError as error:
         return f"Command failed: {command} — {error}"
