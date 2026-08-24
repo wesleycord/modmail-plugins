@@ -93,7 +93,6 @@ async def execute_command(command, thread, allowed, message):
 
     command_message = copy.copy(message)
     command_message.content = f"{bot.prefix}{command}"
-    command_message.author = bot.user
     command_message.guild = getattr(thread.channel, "guild", None)
     command_message.guild_id = getattr(command_message.guild, "id", None)
     command_message.attachments = []
