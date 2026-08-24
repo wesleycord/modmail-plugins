@@ -1,5 +1,4 @@
 import copy
-
 from discord.ext import commands
 
 COMMAND_TOOL = {
