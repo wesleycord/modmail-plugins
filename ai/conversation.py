@@ -1,5 +1,4 @@
 import mimetypes
-import re
 from pathlib import PurePath
 
 
@@ -7,22 +6,16 @@ MAX_MESSAGES = 100
 MAX_CONTEXT_CHARS = 12000
 MAX_MESSAGE_CHARS = 4000
 MAX_HISTORY_MESSAGE_CHARS = 2000
-DISCORD_ID_PATTERN = re.compile(r"(?<!\d)\d{15,25}(?!\d)")
 CONTEXT_INSTRUCTIONS = (
     "CONVERSATION CONTEXT\n"
-    "The transcript below is chronological and contains User, AI, and Staff "
-    "messages. User opened the thread, AI is the automated assistant, and Staff "
-    "are moderators responding in the server.\n\n"
-    "Use earlier messages to determine the ongoing task, not just the latest words. "
-    "Carry forward the user's goal, facts, identifiers, evidence, decisions, and "
-    "questions that still need answers. A short message such as an ID, username, "
-    "yes, no, or an attachment is usually a continuation of the previous request.\n"
-    "Before asking anything, search the transcript and current message for the "
-    "answer. Never repeat a question that was already answered. Treat AI messages "
-    "as prior attempts that may be incomplete or wrong, and treat Staff messages "
-    "as support-team context.\n"
-    "The newest user message appears separately after this transcript. Respond to "
-    "the ongoing task based on all relevant messages, not to the newest words alone.\n\n"
+    "Entries are chronological: User opened the thread, AI is automated, and "
+    "Staff are moderators. Reconstruct the ongoing task before answering. Use "
+    "earlier goals, questions, answers, facts, decisions, and evidence. A short "
+    "User reply normally answers the latest unanswered AI or Staff question; "
+    "apply it to the existing task instead of restarting.\n\n"
+    "Check the transcript before asking anything. Do not repeat a request for "
+    "information already supplied. AI entries are previous attempts and Staff "
+    "entries are support context. Prefer the newest clear User or Staff fact.\n\n"
 )
 
 
@@ -150,17 +143,6 @@ def build(log, current_message, include_ai_context=True):
     current_identity = (
         f"name={current_author.name}, user_id={current_author.id}"
     )
-    current_details = (
-        "KNOWN THREAD USER\n"
-        f"username: {current_author.name}\n"
-        f"user_id: {current_author.id}\n\n"
-    )
-    current_content_ids = DISCORD_ID_PATTERN.findall(current_content)
-    if current_content_ids:
-        current_details += (
-            "POSSIBLE USER IDs IN CURRENT MESSAGE\n"
-            f"user_id candidates: {', '.join(current_content_ids)}\n\n"
-        )
     context_item = {
         "role": "developer",
         "content": _format_context(history),
@@ -168,15 +150,11 @@ def build(log, current_message, include_ai_context=True):
     current_item = {
         "role": "user",
         "content": (
-            "CURRENT USER MESSAGE - answer only this message. It is the newest entry "
-            "after the chronological context above. The known details block is "
-            "authoritative. Do not ask again for any username or ID found in the "
-            "context or current message. Only ask for a reported user’s details if "
-            "that reported user is different from the thread user and no details "
-            "for that person were provided.\n\n"
-            f"{current_details}"
-            f"User ({current_identity}): "
-            f"{current_content}"
+            "CURRENT USER MESSAGE\n"
+            "Use the transcript above. This message is the newest continuation; "
+            "answer the ongoing task and do not repeat an answered question.\n"
+            f"Thread user: {current_identity}\n"
+            f"Message: {current_content or '[no text]'}"
         ),
     }
 
