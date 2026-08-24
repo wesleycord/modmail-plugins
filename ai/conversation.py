@@ -38,13 +38,18 @@ def build(log, current_message):
     messages = log.get("messages", [])
     current_message_id = str(current_message.id)
     history = []
-    history_is_ai = []
     history_is_original = []
     history_chars = 0
     original_request_found = False
 
-    for message in messages[-MAX_MESSAGES:]:
+    for message in messages:
         if str(message.get("message_id")) == current_message_id:
+            continue
+
+        author = message.get("author", {})
+        is_staff = author.get("mod", False)
+        is_ai = author.get("bot", False) or author.get("ai", False)
+        if is_staff or is_ai:
             continue
 
         content = message.get("content") or ""
@@ -53,11 +58,8 @@ def build(log, current_message):
         if not content and not attachments:
             continue
 
-        author = message.get("author", {})
         name = author.get("name", "User")
-        is_staff = author.get("mod", False)
-        is_ai = author.get("bot", False) or author.get("ai", False)
-        is_original = not is_staff and not is_ai and not original_request_found
+        is_original = not original_request_found
         if is_original:
             original_request_found = True
         content = content[:MAX_MESSAGE_CHARS]
@@ -65,10 +67,6 @@ def build(log, current_message):
         speaker = (
             "Original user request"
             if is_original
-            else "AI"
-            if is_ai
-            else "Staff"
-            if is_staff
             else "User"
         )
         history.append(
@@ -76,9 +74,20 @@ def build(log, current_message):
         )
         if attachments:
             history[-1] += f" [Attachments: {', '.join(attachments)}]"
-        history_is_ai.append(is_ai)
         history_is_original.append(is_original)
         history_chars += len(history[-1])
+
+        if len(history) > MAX_MESSAGES:
+            remove_index = next(
+                (
+                    index
+                    for index, is_original in enumerate(history_is_original)
+                    if not is_original
+                ),
+                0,
+            )
+            history_chars -= len(history.pop(remove_index))
+            history_is_original.pop(remove_index)
 
     current_content = current_message.content[:MAX_MESSAGE_CHARS]
     current_attachments = _attachment_summary(current_message.attachments)
@@ -104,18 +113,14 @@ def build(log, current_message):
 
     while history and history_chars > MAX_CONTEXT_CHARS:
         remove_index = next(
-            (index for index, is_ai in enumerate(history_is_ai) if is_ai),
-            next(
-                (
-                    index
-                    for index, is_original in enumerate(history_is_original)
-                    if not is_original
-                ),
-                0,
+            (
+                index
+                for index, is_original in enumerate(history_is_original)
+                if not is_original
             ),
+            0,
         )
         history_chars -= len(history.pop(remove_index))
-        history_is_ai.pop(remove_index)
         history_is_original.pop(remove_index)
         context_item["content"] = (
             "CONVERSATION CONTEXT. The original user request is marked clearly. "
