@@ -181,8 +181,10 @@ class AIClient:
 
             result = await self._run_command(command, thread, allowed, message)
             results.append((command, result))
-            await self._debug(thread, settings, f"command {command!r} -> {result!r}")
-            if self._command_succeeded(result):
+            succeeded = self._command_succeeded(result)
+            status = "executed" if succeeded else f"failed: {result}"
+            await self._debug(thread, settings, f"({status}) {command}")
+            if succeeded:
                 name = command.split(maxsplit=1)[0].lower()
                 if name in {"reply", "close"}:
                     succeeded_user_facing = True
