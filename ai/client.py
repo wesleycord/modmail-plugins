@@ -3,7 +3,7 @@ import json
 
 from ollama import AsyncClient
 
-from .commands import COMMAND_TOOL
+from .commands import COMMANDS_SCHEMA
 from .prompts import SYSTEM_PROMPT
 
 DEFAULT_MODEL = os.getenv("OLLAMA_MODEL", "qwen3:8b")
@@ -35,13 +35,35 @@ class AIClient:
             await thread.channel.send(f"**AI:** [DEBUG] {text}")
 
     async def _chat(self, chat_options):
-        """Send one chat request and return (content, tool_calls, response type name)."""
+        """Send one chat request and return (commands, response type name)."""
         response = await self.client.chat(**chat_options)
         response_message = self._field(response, "message")
-        calls = self._field(response_message, "tool_calls") or []
         content = self._field(response_message, "content") or ""
         content = content.strip() if isinstance(content, str) else ""
-        return content, calls, f"{type(response).__name__}/{type(response_message).__name__}"
+        return self._parse_commands(content), f"{type(response).__name__}/{type(response_message).__name__}"
+
+    @staticmethod
+    def _parse_commands(content):
+        if not content:
+            return []
+
+        try:
+            data = json.loads(content)
+        except json.JSONDecodeError:
+            return []
+
+        if not isinstance(data, dict):
+            return []
+
+        commands = data.get("commands")
+        if not isinstance(commands, list):
+            return []
+
+        return [
+            command.strip()
+            for command in commands
+            if isinstance(command, str) and command.strip()
+        ]
 
     async def respond(self, conversation, thread, settings, message):
         system = SYSTEM_PROMPT
@@ -70,22 +92,21 @@ class AIClient:
         chat_options = {
             "model": model,
             "messages": messages,
-            "tools": [COMMAND_TOOL],
-            # Disabled so the model commits directly to a tool call instead of
-            # leaking chain-of-thought reasoning into `content`.
-            "think": False,
+            "format": COMMANDS_SCHEMA,
+            # Disabled so the response is the direct structured command output
+            # instead of chain-of-thought reasoning.
+            "think": True,
         }
-        content, calls, response_type = await self._chat(chat_options)
+        commands, response_type = await self._chat(chat_options)
+        commands = commands[:MAX_TOOL_CALLS]
 
-        calls = calls[:MAX_TOOL_CALLS] if isinstance(calls, list) else []
         await self._debug(
             thread,
             settings,
-            f"model response: {response_type}; content length: {len(content)}; "
-            f"tool calls: {len(calls)}",
+            f"model response: {response_type}; commands: {len(commands)}",
         )
 
-        if not calls:
+        if not commands:
             await self.execute_command(
                 f"reply {COMMAND_RESPONSE_FALLBACK}",
                 thread,
@@ -95,18 +116,18 @@ class AIClient:
             await self._debug(
                 thread,
                 settings,
-                "model returned no tool calls; fallback sent",
+                "model returned no commands; fallback sent",
             )
             return None
 
         succeeded_user_facing = False
-        for call in calls:
+        for command in commands:
             if not thread.channel:
                 break
 
-            result = await self._run_command(call, thread, allowed, message)
+            result = await self._run_command(command, thread, allowed, message)
             if self._command_succeeded(result):
-                name = self._get_command(call).split(maxsplit=1)[0].lower()
+                name = command.split(maxsplit=1)[0].lower()
                 if name in {"reply", "close"}:
                     succeeded_user_facing = True
 
@@ -128,40 +149,13 @@ class AIClient:
         return isinstance(result, str) and result.startswith("Command executed:")
 
     @staticmethod
-    def _get_command(call):
-        function = AIClient._field(call, "function")
-        if function is None or AIClient._field(
-            function, "name", "execute_command"
-        ) != "execute_command":
-            return None
-
-        arguments = AIClient._field(function, "arguments")
-        if isinstance(arguments, str):
-            try:
-                arguments = json.loads(arguments)
-            except json.JSONDecodeError:
-                return None
-
-        if not isinstance(arguments, dict):
-            return None
-
-        command = arguments.get("command")
-
-        if not isinstance(command, str):
-            return None
-
-        return command.strip() or None
-
-    @staticmethod
     def _field(value, name, default=None):
         if isinstance(value, dict):
             return value.get(name, default)
         return getattr(value, name, default)
 
-    async def _run_command(self, call, thread, allowed, message):
-        command = self._get_command(call)
-
-        if not command:
+    async def _run_command(self, command, thread, allowed, message):
+        if not isinstance(command, str) or not command.strip():
             return "Command failed: invalid command arguments."
 
         name = command.split(maxsplit=1)[0].lower()

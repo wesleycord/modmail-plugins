@@ -3,35 +3,27 @@ import copy
 from discord.ext import commands
 
 
-COMMAND_TOOL = {
-    "type": "function",
-    "function": {
-        "name": "execute_command",
-        "description": (
-            "Execute one complete ModMail command. Put the command name first, "
-            "followed by its arguments separated by spaces. <value> means "
-            "required and [value] means optional. Brackets are notation only and "
-            "must not be included in the command. Use only real command names "
-            "available in the current command list; never invent one."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "command": {
-                    "type": "string",
-                    "minLength": 1,
-                    "description": (
-                        "One complete command string: command name first, followed "
-                        "by its arguments. Use the exact argument order defined by "
-                        "the ModMail command. Do not add explanations or placeholder "
-                        "brackets."
-                    ),
-                },
-            },
-            "required": ["command"],
-            "additionalProperties": False,
+# Structured-output schema (used as Ollama's `format`) instead of native
+# function/tool calling, which small local models like qwen3 call unreliably.
+COMMANDS_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "commands": {
+            "type": "array",
+            "description": (
+                "One or more complete ModMail commands to run, in order. Each "
+                "command string starts with the command name, followed by its "
+                "arguments separated by spaces. <value> means required and "
+                "[value] means optional; brackets are notation only and must "
+                "not be included. Use only real command names available in "
+                "the current command list; never invent one."
+            ),
+            "items": {"type": "string", "minLength": 1},
+            "minItems": 1,
         },
     },
+    "required": ["commands"],
+    "additionalProperties": False,
 }
 
 
