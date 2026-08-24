@@ -1,9 +1,6 @@
 import copy
-import logging
 
 from discord.ext import commands
-
-logger = logging.getLogger("modmail.ai")
 
 COMMAND_TOOL = {
     "type": "function",
@@ -33,7 +30,6 @@ async def execute_command(command, thread, allowed, message):
     command = command.strip().lower()
     name = command.split(maxsplit=1)[0] if command else ""
     if command not in allowed and name not in allowed:
-        logger.warning("Command denied by allowlist: %s", command)
         return "Command denied: it is not on the allowlist"
 
     bot = thread.bot
@@ -44,17 +40,14 @@ async def execute_command(command, thread, allowed, message):
     context = await bot.get_context(command_message)
     context.thread = thread
     if context.command is None:
-        logger.warning("Bot command not found: %s", command)
         return "Command failed: the bot command was not found"
 
     try:
         command_message.author = bot.user
         if not await bot.can_run(context, call_once=True):
-            logger.warning("Bot command permission denied: %s", command)
             return "Command failed: the bot is not allowed to run it"
 
         await context.command.invoke(context)
-        logger.info("Bot command executed: %s", command)
     except commands.CommandError as error:
         return f"Command failed: {error}"
     except Exception as error:

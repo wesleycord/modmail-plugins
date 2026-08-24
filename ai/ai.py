@@ -1,5 +1,4 @@
 import asyncio
-import logging
 from collections import defaultdict
 
 from discord.ext import commands
@@ -12,13 +11,12 @@ from .client import AIClient, DEFAULT_MODEL
 from .commands import execute_command
 from .conversation import build
 
-logger = logging.getLogger("modmail.ai")
-
 DEFAULT_SETTINGS = {
     "_id": "settings",
     "prompt": "",
     "commands": [],
     "model": DEFAULT_MODEL,
+    "ai_default": True,
 }
 
 
@@ -35,12 +33,12 @@ class AI(commands.Cog):
             "prompt": DEFAULT_SETTINGS["prompt"],
             "commands": list(DEFAULT_SETTINGS["commands"]),
             "model": DEFAULT_SETTINGS["model"],
+            "ai_default": DEFAULT_SETTINGS["ai_default"],
         }
         self.client = AIClient(execute_command)
         self.locks = defaultdict(asyncio.Lock)
 
     async def cog_load(self):
-        logger.info("Loading AI plugin")
         self.settings = await self.coll.find_one({"_id": "settings"})
         if not self.settings:
             self.settings = {
@@ -48,11 +46,13 @@ class AI(commands.Cog):
                 "prompt": DEFAULT_SETTINGS["prompt"],
                 "commands": list(DEFAULT_SETTINGS["commands"]),
                 "model": DEFAULT_SETTINGS["model"],
+                "ai_default": DEFAULT_SETTINGS["ai_default"],
             }
             await self._save()
 
         self.settings["prompt"] = str(self.settings.get("prompt", ""))
         self.settings["model"] = str(self.settings.get("model", DEFAULT_MODEL)).strip()
+        self.settings["ai_default"] = bool(self.settings.get("ai_default", True))
         commands = self.settings.get("commands", [])
         if not isinstance(commands, list):
             commands = []
@@ -62,30 +62,35 @@ class AI(commands.Cog):
             for command in commands
             if isinstance(command, str) and command.strip()
         ]
-        logger.info(
-            "AI plugin ready: model=%s allowed_commands=%s",
-            self.settings["model"],
-            self.settings["commands"],
-        )
 
     def cog_unload(self):
         self.bot.loop.create_task(self.client.close())
+
+    @commands.Cog.listener()
+    async def on_thread_create(self, thread):
+        await self.bot.api.logs.update_one(
+            {"channel_id": str(thread.channel.id)},
+            {"$set": {"ai": self.settings["ai_default"]}},
+        )
 
     @commands.Cog.listener()
     async def on_thread_reply(self, thread, is_mod, message, anonymous, plain):
         if is_mod or message.author.bot or not message.content.strip():
             return
 
-        logger.info(
-            "AI received message: thread=%s message=%s",
-            thread.channel.id,
-            message.id,
-        )
         async with self.locks[thread.channel.id]:
             try:
                 log = await self.bot.api.get_log(thread.channel.id)
                 if not log:
-                    logger.warning("No log found for thread=%s", thread.channel.id)
+                    return
+
+                if "ai" not in log:
+                    log["ai"] = self.settings["ai_default"]
+                    await self.bot.api.logs.update_one(
+                        {"channel_id": str(thread.channel.id)},
+                        {"$set": {"ai": log["ai"]}},
+                    )
+                if not log["ai"]:
                     return
 
                 response = await self.client.respond(
@@ -97,18 +102,17 @@ class AI(commands.Cog):
                 if response:
                     message.author = self.bot.user
                     await thread.reply(message, response, anonymous=False, plain=False)
-                    logger.info("AI reply sent: thread=%s message=%s", thread.channel.id, message.id)
-                else:
-                    logger.warning("AI returned an empty response: thread=%s", thread.channel.id)
             except Exception:
                 self.bot.logger.exception("Failed to process AI message %s", message.id)
 
     @commands.group(name="ai", invoke_without_command=True)
     @commands.guild_only()
-    @checks.has_permissions(PermissionLevel.OWNER)
     async def ai(self, ctx):
         """
         Manage the AI assistant.
+
+        Toggle AI for the current thread (moderators):
+        - `{prefix}ai toggle`
 
         View or change the server prompt:
         - `{prefix}ai prompt`
@@ -123,10 +127,15 @@ class AI(commands.Cog):
         Manage the Ollama model:
         - `{prefix}ai models`
         - `{prefix}ai models set <model>`
+
+        Set the default for new threads (owner):
+        - `{prefix}ai default on`
+        - `{prefix}ai default off`
         """
         await ctx.send_help(ctx.command)
 
     @ai.group(invoke_without_command=True)
+    @checks.has_permissions(PermissionLevel.OWNER)
     async def prompt(self, ctx):
         """View the server-specific AI prompt."""
         await ctx.send(self.settings["prompt"] or "No custom prompt set")
@@ -146,6 +155,7 @@ class AI(commands.Cog):
         await ctx.send("AI prompt cleared")
 
     @ai.group(name="commands", aliases=["command"], invoke_without_command=True)
+    @checks.has_permissions(PermissionLevel.OWNER)
     async def command_list(self, ctx):
         """View commands the AI is allowed to use."""
         allowed = self.settings["commands"]
@@ -170,6 +180,7 @@ class AI(commands.Cog):
         await ctx.send(f"Removed AI command: `{value}`")
 
     @ai.group(name="models", aliases=["model"], invoke_without_command=True)
+    @checks.has_permissions(PermissionLevel.OWNER)
     async def models(self, ctx):
         """List installed Ollama models and show the selected model."""
         models = await self.client.models()
@@ -190,6 +201,33 @@ class AI(commands.Cog):
         self.settings["model"] = value
         await self._save()
         await ctx.send(f"AI model set to `{value}`")
+
+    @ai.command(name="toggle")
+    @checks.has_permissions(PermissionLevel.MODERATOR)
+    @checks.thread_only()
+    async def toggle(self, ctx):
+        """Toggle AI responses for the current thread."""
+        log = await self.bot.api.get_log(ctx.channel.id)
+        if not log:
+            return await ctx.send("No log found for this thread")
+
+        enabled = not bool(log and log.get("ai", self.settings["ai_default"]))
+        await self.bot.api.logs.update_one(
+            {"channel_id": str(ctx.channel.id)},
+            {"$set": {"ai": enabled}},
+        )
+        await ctx.send(f"AI {'enabled' if enabled else 'disabled'} for this thread")
+
+    @ai.command(name="default")
+    @checks.has_permissions(PermissionLevel.OWNER)
+    async def ai_default(self, ctx, value: str.lower):
+        """Set whether AI starts enabled in new threads."""
+        if value not in ("on", "off"):
+            return await ctx.send("Use `ai default on` or `ai default off`")
+
+        self.settings["ai_default"] = value == "on"
+        await self._save()
+        await ctx.send(f"AI is {value} by default")
 
     async def _run_command(self, command, thread, allowed, message):
         from .commands import execute_command
