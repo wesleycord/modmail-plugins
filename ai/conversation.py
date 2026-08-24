@@ -17,6 +17,9 @@ CONTEXT_INSTRUCTIONS = (
     "message IDs, evidence, and details supplied by the user or staff. Previous AI "
     "responses are context only, not new user requests. Staff messages are context "
     "from the support team.\n"
+    "Before asking a question, check every transcript entry and the current message "
+    "for the requested detail. If it is present, use it and continue processing the "
+    "request. Do not repeat a question that was already answered.\n"
     "The newest user message appears separately after this transcript. Answer only "
     "that message.\n\n"
 )
@@ -145,6 +148,12 @@ def build(log, current_message):
         current_content += f" [Attachments: {', '.join(current_attachments)}]"
     current_author = current_message.author
     current_identity = f"{current_author.name} (ID: {current_author.id})"
+    current_details = (
+        "KNOWN DETAILS FROM THE CURRENT MESSAGE\n"
+        f"Thread user username: {current_author.name}\n"
+        f"Thread user ID: {current_author.id}\n"
+        f"Current message content: {current_content or '[no text]'}\n\n"
+    )
     context_item = {
         "role": "developer",
         "content": _format_context(history),
@@ -153,8 +162,12 @@ def build(log, current_message):
         "role": "user",
         "content": (
             "CURRENT USER MESSAGE - answer only this message. It is the newest entry "
-            "after the chronological context above. Do not re-request details the "
-            "user already provided:\n"
+            "after the chronological context above. The known details block is "
+            "authoritative. Do not ask again for any username or ID found in the "
+            "context or current message. Only ask for a reported user’s details if "
+            "that reported user is different from the thread user and no details "
+            "for that person were provided.\n\n"
+            f"{current_details}"
             f"User ({current_identity}): "
             f"{current_content}"
         ),
