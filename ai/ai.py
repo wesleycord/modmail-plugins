@@ -103,6 +103,7 @@ class AI(commands.Cog):
                     self.settings,
                     message,
                 )
+                print(response, 10110101010101010101010)
                 if response:
                     message.author = self.bot.user
                     await thread.reply(message, response, anonymous=False, plain=False)

@@ -39,6 +39,7 @@ class AIClient:
         ]
 
         model = settings.get("model") or DEFAULT_MODEL
+        print("first ai call")
 
         # First AI call.
         # The AI decides whether it needs to execute commands.
