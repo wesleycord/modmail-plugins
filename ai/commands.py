@@ -1,17 +1,32 @@
 import copy
+
 from discord.ext import commands
+
 
 COMMAND_TOOL = {
     "type": "function",
     "function": {
         "name": "execute_command",
-        "description": "Run one approved Discord assistant command.",
+        "description": (
+            "Execute an approved Discord Modmail command. "
+            "You MUST use this tool to perform actions and to reply to the user. "
+            "You MUST execute exactly one reply command. "
+            "The reply command should contain the complete response to the user. "
+            "If closing the thread, the reply must happen before the close command."
+        ),
         "parameters": {
             "type": "object",
             "properties": {
                 "command": {
                     "type": "string",
-                    "description": "One command name from the server allowlist.",
+                    "description": (
+                        "The complete Modmail command to execute. "
+                        "For a user response, use: "
+                        "'reply <message>'. "
+                        "For example: "
+                        "'reply Hi! How can I help you today?'. "
+                        "Do not merely describe what should be done."
+                    ),
                 },
             },
             "required": ["command"],
@@ -22,7 +37,7 @@ COMMAND_TOOL = {
 
 
 async def execute_command(command, thread, allowed, message):
-    """Run a command only when its exact name is allowlisted."""
+    """Run a command when it is allowlisted."""
 
     if not isinstance(command, str):
         await thread.channel.send(
@@ -30,14 +45,19 @@ async def execute_command(command, thread, allowed, message):
         )
         return "Command denied: it is not on the allowlist"
 
-    command = command.strip().lower()
-    name = command.split(maxsplit=1)[0] if command else ""
+    command = command.strip()
 
-    if command not in allowed and name not in allowed:
+    name = command.split(maxsplit=1)[0].lower() if command else ""
+
+    # Reply is ALWAYS allowed and cannot be removed from the allowlist.
+    if name != "reply" and command not in allowed and name not in allowed:
         await thread.channel.send(
             "Command denied: it is not on the allowlist"
         )
         return "Command denied: it is not on the allowlist"
+
+    if not command:
+        return "Command failed: no command was provided"
 
     await thread.channel.send(f"Executing: {command}")
 
@@ -57,7 +77,10 @@ async def execute_command(command, thread, allowed, message):
         command_message.author = bot.user
 
         if not await bot.can_run(context, call_once=True):
-            return f"Command failed: {command} — bot is not allowed to run it"
+            return (
+                f"Command failed: {command} — "
+                "bot is not allowed to run it"
+            )
 
         await context.command.invoke(context)
 
