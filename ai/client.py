@@ -125,30 +125,73 @@ class AIClient:
             )
             return None
 
+        succeeded_user_facing, results = await self._execute_commands(
+            commands, thread, allowed, message, settings
+        )
+
+        if not succeeded_user_facing and thread.channel:
+            # Give the model one chance to correct itself using its own errors
+            # instead of immediately falling back to the generic apology.
+            errors = "\n".join(f"{cmd!r} -> {result!r}" for cmd, result in results)
+            retry_messages = [
+                *messages,
+                {"role": "assistant", "content": content},
+                {
+                    "role": "user",
+                    "content": (
+                        "Your previous response failed:\n"
+                        f"{errors}\n"
+                        "Respond again with a corrected JSON object. Use only the "
+                        "command names listed under AVAILABLE COMMAND NAMES, and make "
+                        "sure `reply`/`close` include any required text."
+                    ),
+                },
+            ]
+            retry_commands, retry_content, retry_type = await self._chat(
+                {**chat_options, "messages": retry_messages}
+            )
+            retry_commands = retry_commands[:MAX_TOOL_CALLS]
+            await self._debug(
+                thread,
+                settings,
+                f"retry response: {retry_type}; commands: {len(retry_commands)}",
+            )
+            await self._debug(thread, settings, f"retry raw response: {retry_content!r}")
+
+            if retry_commands:
+                succeeded_user_facing, _ = await self._execute_commands(
+                    retry_commands, thread, allowed, message, settings
+                )
+
+            if not succeeded_user_facing and thread.channel:
+                await self.execute_command(
+                    f"reply {COMMAND_RESPONSE_FALLBACK}",
+                    thread,
+                    allowed,
+                    message,
+                )
+                await self._debug(thread, settings, "retry failed; fallback sent")
+
+        return None
+
+    async def _execute_commands(self, commands, thread, allowed, message, settings):
+        """Run each command in order and report whether reply/close succeeded."""
         succeeded_user_facing = False
+        results = []
+
         for command in commands:
             if not thread.channel:
                 break
 
             result = await self._run_command(command, thread, allowed, message)
+            results.append((command, result))
             await self._debug(thread, settings, f"command {command!r} -> {result!r}")
             if self._command_succeeded(result):
                 name = command.split(maxsplit=1)[0].lower()
                 if name in {"reply", "close"}:
                     succeeded_user_facing = True
 
-        if not succeeded_user_facing and thread.channel:
-            await self.execute_command(
-                f"reply {COMMAND_RESPONSE_FALLBACK}",
-                thread,
-                allowed,
-                message,
-            )
-            await self._debug(
-                thread, settings, "no reply/close command succeeded; fallback sent"
-            )
-
-        return None
+        return succeeded_user_facing, results
 
     @staticmethod
     def _command_succeeded(result):
