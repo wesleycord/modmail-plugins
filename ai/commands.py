@@ -14,7 +14,14 @@ COMMAND_TOOL = {
             "reply and close are always allowed and may both be used. "
             "If both are used, reply must come before close. "
             "Other commands are only allowed when they are present in the "
-            "server command allowlist."
+            "server command allowlist. "
+            "Be extremely careful with close: NEVER close a thread unless "
+            "the current user message explicitly requests, confirms, or "
+            "clearly instructs that the thread should be closed. "
+            "Do not infer a request to close from greetings, resolved issues, "
+            "thanks, inactivity, conversation endings, or general statements. "
+            "Closing must be explicitly mentioned or unambiguously requested "
+            "by the user."
         ),
         "parameters": {
             "type": "object",
@@ -32,6 +39,11 @@ COMMAND_TOOL = {
                         "For close, time and reason are both optional and "
                         "can be provided independently. "
                         "Time uses durations such as 5h30m.\n\n"
+                        "IMPORTANT: Only use a close command when the user "
+                        "explicitly asks or clearly confirms that the thread "
+                        "should be closed. Never close based on assumptions, "
+                        "conversation context, a greeting, thanks, inactivity, "
+                        "or because the issue appears resolved.\n\n"
                         "Examples:\n"
                         "reply Thanks for the report!\n"
                         "close\n"
