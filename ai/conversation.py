@@ -33,9 +33,38 @@ def _attachment_summary(attachments):
     return summaries
 
 
+def _is_user_message(message):
+    author = message.get("author") or {}
+    if not isinstance(author, dict):
+        return False
+
+    return not (
+        message.get("bot")
+        or message.get("ai")
+        or author.get("bot")
+        or author.get("ai")
+        or author.get("mod")
+    )
+
+
+def _format_user_message(message, is_original):
+    author = message.get("author") or {}
+    name = author.get("name") or "User"
+    content = str(message.get("content") or "")[:MAX_MESSAGE_CHARS]
+    attachments = _attachment_summary(message.get("attachments"))
+    if not content and not attachments:
+        return None
+
+    speaker = "Original user request" if is_original else "User"
+    formatted = f"{speaker} ({name}): {content}"
+    if attachments:
+        formatted += f" [Attachments: {', '.join(attachments)}]"
+    return formatted
+
+
 def build(log, current_message):
     """Build context separately from the only message that needs an answer."""
-    messages = log.get("messages", [])
+    messages = log.get("messages", []) or []
     current_message_id = str(current_message.id)
     history = []
     history_is_original = []
@@ -43,37 +72,23 @@ def build(log, current_message):
     original_request_found = False
 
     for message in messages:
+        if not isinstance(message, dict):
+            continue
+
         if str(message.get("message_id")) == current_message_id:
             continue
 
-        author = message.get("author", {})
-        is_staff = author.get("mod", False)
-        is_ai = author.get("bot", False) or author.get("ai", False)
-        if is_staff or is_ai:
+        if not _is_user_message(message):
             continue
 
-        content = message.get("content") or ""
-        attachments = _attachment_summary(message.get("attachments"))
-
-        if not content and not attachments:
+        formatted = _format_user_message(message, not original_request_found)
+        if formatted is None:
             continue
 
-        name = author.get("name", "User")
         is_original = not original_request_found
         if is_original:
             original_request_found = True
-        content = content[:MAX_MESSAGE_CHARS]
-
-        speaker = (
-            "Original user request"
-            if is_original
-            else "User"
-        )
-        history.append(
-            f"{speaker} ({name}): {content[:MAX_MESSAGE_CHARS]}"
-        )
-        if attachments:
-            history[-1] += f" [Attachments: {', '.join(attachments)}]"
+        history.append(formatted)
         history_is_original.append(is_original)
         history_chars += len(history[-1])
 
@@ -89,7 +104,7 @@ def build(log, current_message):
             history_chars -= len(history.pop(remove_index))
             history_is_original.pop(remove_index)
 
-    current_content = current_message.content[:MAX_MESSAGE_CHARS]
+    current_content = str(current_message.content or "")[:MAX_MESSAGE_CHARS]
     current_attachments = _attachment_summary(current_message.attachments)
     if current_attachments:
         current_content += f" [Attachments: {', '.join(current_attachments)}]"
