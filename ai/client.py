@@ -94,6 +94,7 @@ class AIClient:
         reply_calls = []
         close_calls = []
         other_calls = []
+        parsed_commands = []
 
         valid_calls = 0
         for call in calls[:MAX_TOOL_CALLS] if isinstance(calls, list) else []:
@@ -104,6 +105,7 @@ class AIClient:
             valid_calls += 1
 
             name = command.split(maxsplit=1)[0].lower()
+            parsed_commands.append(name)
 
             if name == "reply":
                 reply_calls.append(call)
@@ -117,7 +119,8 @@ class AIClient:
             settings,
             f"parsed {valid_calls} valid command(s): "
             f"{len(reply_calls)} reply, {len(close_calls)} close, "
-            f"{len(other_calls)} other",
+            f"{len(other_calls)} other; commands: "
+            f"{', '.join(parsed_commands) or 'none'}",
         )
 
         if not reply_calls and not close_calls:
@@ -168,7 +171,6 @@ class AIClient:
                 allowed,
                 message,
             )
-            await self._debug(thread, settings, f"close result: {result}")
             successful_close |= self._command_succeeded(result)
 
         if not successful_reply and not successful_close and thread.channel:
