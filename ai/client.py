@@ -71,19 +71,23 @@ class AIClient:
         response_message = self._field(response, "message")
         calls = self._field(response_message, "tool_calls") or []
         content = self._field(response_message, "content") or ""
+        thinking = self._field(response_message, "thinking") or ""
         has_content = isinstance(content, str) and bool(content.strip())
-        if not has_content:
+        if not has_content and isinstance(thinking, str) and thinking.strip():
             # Some models still leak the answer into `thinking` even with think=False.
-            thinking = self._field(response_message, "thinking") or ""
-            if isinstance(thinking, str) and thinking.strip():
-                content = thinking.strip()
-                has_content = True
+            content = thinking.strip()
+            has_content = True
         await self._debug(
             thread,
             settings,
             "model response: "
             f"{type(response).__name__}/{type(response_message).__name__}; "
             f"raw tool calls: {len(calls) if isinstance(calls, list) else 'invalid'}",
+        )
+        await self._debug(
+            thread,
+            settings,
+            f"raw content: {content[:300]!r}; raw thinking: {thinking[:300]!r}",
         )
 
         if not calls:
