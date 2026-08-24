@@ -63,9 +63,6 @@ class AIClient:
             "messages": messages,
             "tools": [COMMAND_TOOL],
         }
-        if model.lower().startswith("qwen3"):
-            chat_options["think"] = False
-
         response = await self.client.chat(**chat_options)
 
         response_message = self._field(response, "message")
@@ -79,12 +76,23 @@ class AIClient:
             f"raw tool calls: {len(calls) if isinstance(calls, list) else 'invalid'}",
         )
 
-        if isinstance(content, str) and content.strip():
-            await thread.channel.send(f"**AI:** {content.strip()}")
-            await self._debug(thread, settings, "model content sent to thread")
-
         if not calls:
             if isinstance(content, str) and content.strip():
+                if not thread.channel:
+                    await self._debug(
+                        thread,
+                        settings,
+                        "thread is closed; normal model response was not sent",
+                    )
+                    return None
+
+                await self._run_reply(
+                    content.strip(),
+                    thread,
+                    allowed,
+                    message,
+                )
+                await self._debug(thread, settings, "normal model response sent as reply command")
                 return None
 
             await self._run_reply(
