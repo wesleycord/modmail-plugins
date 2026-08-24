@@ -25,12 +25,16 @@ COMMAND_TOOL = {
 async def execute_command(command, thread, allowed, message):
     """Run a command only when its exact name is allowlisted."""
     if not isinstance(command, str):
+        await thread.channel.send("Command denied: it is not on the allowlist")
         return "Command denied: it is not on the allowlist"
 
     command = command.strip().lower()
     name = command.split(maxsplit=1)[0] if command else ""
     if command not in allowed and name not in allowed:
+        await thread.channel.send("Command denied: it is not on the allowlist")
         return "Command denied: it is not on the allowlist"
+    
+    await thread.channel.send(f"Executing: {command}")
 
     bot = thread.bot
     command_message = copy.copy(message)
