@@ -69,7 +69,7 @@ class AI(commands.Cog):
     @commands.Cog.listener()
     async def on_thread_create(self, thread):
         await self.bot.api.logs.update_one(
-            {"channel_id": str(thread.channel.id)},
+            {"channel_id": str(thread.id)},
             {"$set": {"ai": self.settings["ai_default"]}},
         )
 
