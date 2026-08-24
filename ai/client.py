@@ -68,6 +68,7 @@ class AIClient:
         response_message = self._field(response, "message")
         calls = self._field(response_message, "tool_calls") or []
         content = self._field(response_message, "content") or ""
+        has_content = isinstance(content, str) and bool(content.strip())
         await self._debug(
             thread,
             settings,
@@ -77,7 +78,7 @@ class AIClient:
         )
 
         if not calls:
-            if isinstance(content, str) and content.strip():
+            if has_content:
                 if not thread.channel:
                     await self._debug(
                         thread,
@@ -140,7 +141,20 @@ class AIClient:
             f"{', '.join(parsed_commands) or 'none'}",
         )
 
+        if has_content and thread.channel:
+            await thread.channel.send(f"**AI:** {content.strip()}")
+            await self._debug(thread, settings, "content sent with tool command(s)")
+
         if not reply_calls and not close_calls:
+            if has_content:
+                await thread.channel.send(f"**AI:** {content.strip()}")
+                await self._debug(
+                    thread,
+                    settings,
+                    "content sent; no valid user-facing tool command",
+                )
+                return None
+
             await self._run_reply(
                 COMMAND_RESPONSE_FALLBACK,
                 thread,
@@ -190,7 +204,7 @@ class AIClient:
             )
             successful_close |= self._command_succeeded(result)
 
-        if not successful_reply and not successful_close and thread.channel:
+        if not has_content and not successful_reply and not successful_close and thread.channel:
             await self._run_reply(
                 COMMAND_RESPONSE_FALLBACK,
                 thread,

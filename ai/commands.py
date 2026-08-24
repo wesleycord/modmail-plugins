@@ -12,7 +12,7 @@ COMMAND_TOOL = {
             "followed by its arguments separated by spaces. <value> means "
             "required and [value] means optional. Brackets are notation only and "
             "must not be included in the command. Use only real command names "
-            "available in the current command list; never invent one. For a normal "
+            "available in the current command list; never invent one."
         ),
         "parameters": {
             "type": "object",
