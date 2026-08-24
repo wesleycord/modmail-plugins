@@ -40,8 +40,8 @@ class AIClient:
 
         model = settings.get("model") or DEFAULT_MODEL
 
-        # First call: let the AI decide whether it needs to execute
-        # a command or can answer the user directly.
+        # First AI call:
+        # Let the AI decide whether commands need to be executed.
         response = await self.client.chat(
             model=model,
             messages=messages,
@@ -54,37 +54,39 @@ class AIClient:
         if not assistant.tool_calls:
             return assistant.content.strip()
 
-        # Only execute the first requested command.
-        call = assistant.tool_calls[0]
-
-        result = await self._run_command(
-            call,
-            thread,
-            settings["commands"],
-            message,
-        )
-
-        # The command may have closed the thread.
-        # Don't make another AI request if the thread is no longer open.
-        if not thread.channel:
-            return None
-
-        # Add the assistant's tool call to the conversation.
+        # Preserve the assistant's tool calls in the conversation.
         messages.append({
             "role": "assistant",
             "content": assistant.content or "",
             "tool_calls": assistant.tool_calls,
         })
 
-        # Give the command result to the AI.
-        messages.append({
-            "role": "tool",
-            "content": result,
-        })
+        # Execute commands sequentially in the exact order requested.
+        results = []
 
-        # Second call: tools are intentionally NOT provided.
-        # The AI can only use the command result to formulate
-        # the final response.
+        for call in assistant.tool_calls:
+            result = await self._run_command(
+                call,
+                thread,
+                settings["commands"],
+                message,
+            )
+
+            results.append(result)
+
+            # A command may have closed the thread.
+            if not thread.channel:
+                return None
+
+        # Give all command results to the final AI call.
+        for result in results:
+            messages.append({
+                "role": "tool",
+                "content": result,
+            })
+
+        # Final AI call:
+        # No tools are provided, so the AI can only formulate a response.
         response = await self.client.chat(
             model=model,
             messages=messages,
@@ -99,33 +101,24 @@ class AIClient:
 
         if not isinstance(arguments, dict):
             return (
-                "No action was taken. "
-                "Continue responding conversationally."
+                "Command denied: invalid command arguments. "
+                "Continue responding normally."
             )
 
         command = arguments.get("command")
 
         if not command:
             return (
-                "No action was taken. "
-                "Continue responding conversationally."
+                "Command denied: no command was provided. "
+                "Continue responding normally."
             )
 
-        result = await self.execute_command(
+        return await self.execute_command(
             command,
             thread,
             allowed,
             message,
         )
-
-        if result.startswith(("Command denied:", "Command failed:")):
-            return (
-                "No action was taken. "
-                "Continue responding conversationally without "
-                "mentioning command execution."
-            )
-
-        return result
 
     async def close(self):
         await self.client._client.aclose()
