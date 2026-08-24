@@ -21,6 +21,7 @@ DEFAULT_SETTINGS = {
     "commands": [],
     "model": DEFAULT_MODEL,
     "ai_default": True,
+    "include_ai_context": True,
 }
 
 
@@ -38,6 +39,7 @@ class AI(commands.Cog):
             "commands": list(DEFAULT_SETTINGS["commands"]),
             "model": DEFAULT_SETTINGS["model"],
             "ai_default": DEFAULT_SETTINGS["ai_default"],
+            "include_ai_context": DEFAULT_SETTINGS["include_ai_context"],
         }
         self.client = AIClient(execute_command)
         self.locks = defaultdict(asyncio.Lock)
@@ -51,12 +53,16 @@ class AI(commands.Cog):
                 "commands": list(DEFAULT_SETTINGS["commands"]),
                 "model": DEFAULT_SETTINGS["model"],
                 "ai_default": DEFAULT_SETTINGS["ai_default"],
+                "include_ai_context": DEFAULT_SETTINGS["include_ai_context"],
             }
             await self._save()
 
         self.settings["prompt"] = str(self.settings.get("prompt", ""))
         self.settings["model"] = str(self.settings.get("model", DEFAULT_MODEL)).strip()
         self.settings["ai_default"] = bool(self.settings.get("ai_default", True))
+        self.settings["include_ai_context"] = bool(
+            self.settings.get("include_ai_context", True)
+        )
         commands = self.settings.get("commands", [])
         if not isinstance(commands, list):
             commands = []
@@ -103,7 +109,11 @@ class AI(commands.Cog):
 
                 await thread.channel.send("AI: Generating Response")
                 response = await self.client.respond(
-                    build(log, message),
+                    build(
+                        log,
+                        message,
+                        include_ai_context=self.settings["include_ai_context"],
+                    ),
                     thread,
                     self.settings,
                     message,
@@ -142,6 +152,10 @@ class AI(commands.Cog):
         - `{prefix}ai default on`
         - `{prefix}ai default off`
 
+        Configure previous AI responses in context (owner):
+        - `{prefix}ai context on`
+        - `{prefix}ai context off`
+
         View the current AI configuration and this thread's status:
         - `{prefix}ai status`
         """
@@ -155,6 +169,7 @@ class AI(commands.Cog):
         lines = [
             f"Model: `{self.settings['model']}`",
             f"Default for new threads: **{'on' if self.settings['ai_default'] else 'off'}**",
+            f"Previous AI context: **{'on' if self.settings['include_ai_context'] else 'off'}**",
         ]
 
         log = await self.bot.api.get_log(ctx.channel.id)
@@ -287,6 +302,34 @@ class AI(commands.Cog):
         """Start AI disabled in new threads."""
         await self._set_default(False)
         await ctx.send("AI is off by default")
+
+    @ai.group(name="context", invoke_without_command=True)
+    @checks.has_permissions(PermissionLevel.OWNER)
+    async def ai_context(self, ctx):
+        """Configure whether previous AI responses are included in context."""
+        state = "included" if self.settings["include_ai_context"] else "excluded"
+        await ctx.send(
+            f"Previous AI responses are currently **{state}**.\n"
+            "Use `ai context on` or `ai context off`."
+        )
+
+    async def _set_ai_context(self, enabled):
+        self.settings["include_ai_context"] = enabled
+        await self._save()
+
+    @ai_context.command(name="on", aliases=["enable"])
+    @checks.has_permissions(PermissionLevel.OWNER)
+    async def ai_context_on(self, ctx):
+        """Include previous AI responses in conversation context."""
+        await self._set_ai_context(True)
+        await ctx.send("Previous AI responses will be included in context")
+
+    @ai_context.command(name="off", aliases=["disable"])
+    @checks.has_permissions(PermissionLevel.OWNER)
+    async def ai_context_off(self, ctx):
+        """Exclude previous AI responses from conversation context."""
+        await self._set_ai_context(False)
+        await ctx.send("Previous AI responses will be excluded from context")
 
     async def _run_command(self, command, thread, allowed, message):
         from .commands import execute_command

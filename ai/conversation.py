@@ -1,10 +1,13 @@
 import mimetypes
+import re
 from pathlib import PurePath
 
 
-MAX_MESSAGES = 200
-MAX_CONTEXT_CHARS = 24000
+MAX_MESSAGES = 100
+MAX_CONTEXT_CHARS = 12000
 MAX_MESSAGE_CHARS = 4000
+MAX_HISTORY_MESSAGE_CHARS = 2000
+DISCORD_ID_PATTERN = re.compile(r"(?<!\d)\d{15,25}(?!\d)")
 CONTEXT_INSTRUCTIONS = (
     "CONVERSATION CONTEXT\n"
     "The transcript below is in chronological order. It contains three kinds "
@@ -51,28 +54,44 @@ def _attachment_summary(attachments):
     return summaries
 
 
+def _author_details(message):
+    author = message.get("author") or {}
+    if isinstance(author, dict):
+        name = author.get("name")
+        author_id = author.get("id")
+    else:
+        name = str(author)
+        author_id = None
+
+    name = name or message.get("author_name") or "User"
+    author_id = (
+        author_id
+        or message.get("author_id")
+        or message.get("user_id")
+        or message.get("recipient_id")
+    )
+    return str(name), str(author_id) if author_id is not None else None
+
+
 def _message_kind(message):
     author = message.get("author") or {}
-    if not isinstance(author, dict):
-        return None
+    author_data = author if isinstance(author, dict) else {}
 
     if (
         message.get("ai")
         or message.get("bot")
-        or author.get("ai")
-        or author.get("bot")
+        or author_data.get("ai")
+        or author_data.get("bot")
     ):
         return "AI"
-    if message.get("mod") or author.get("mod"):
+    if message.get("mod") or author_data.get("mod"):
         return "Staff"
     return "User"
 
 
 def _format_message(message, kind, is_original=False):
-    author = message.get("author") or {}
-    name = author.get("name") or "User"
-    author_id = author.get("id")
-    content = str(message.get("content") or "")[:MAX_MESSAGE_CHARS]
+    name, author_id = _author_details(message)
+    content = str(message.get("content") or "")[:MAX_HISTORY_MESSAGE_CHARS]
     attachments = _attachment_summary(message.get("attachments"))
     if not content and not attachments:
         return None
@@ -85,8 +104,13 @@ def _format_message(message, kind, is_original=False):
         speaker = "Original user request"
     else:
         speaker = "User"
-    identity = f"{name} (ID: {author_id})" if author_id else name
-    formatted = f"{speaker} ({identity}): {content}"
+    identity = f"name={name}"
+    if author_id:
+        identity += f", user_id={author_id}"
+    formatted = f"{speaker} [{identity}]: {content or '[no text]'}"
+    content_ids = DISCORD_ID_PATTERN.findall(content)
+    if content_ids:
+        formatted += f" [Possible Discord user IDs in message: {', '.join(content_ids)}]"
     if attachments:
         formatted += f" [Attachments: {', '.join(attachments)}]"
     return formatted
@@ -99,7 +123,7 @@ def _format_context(history):
     return CONTEXT_INSTRUCTIONS + entries
 
 
-def build(log, current_message):
+def build(log, current_message, include_ai_context=True):
     """Build context separately from the only message that needs an answer."""
     messages = log.get("messages", []) or []
     current_message_id = str(current_message.id)
@@ -117,6 +141,8 @@ def build(log, current_message):
 
         kind = _message_kind(message)
         if kind is None:
+            continue
+        if kind == "AI" and not include_ai_context:
             continue
 
         is_original = kind == "User" and not original_request_found
@@ -147,13 +173,20 @@ def build(log, current_message):
     if current_attachments:
         current_content += f" [Attachments: {', '.join(current_attachments)}]"
     current_author = current_message.author
-    current_identity = f"{current_author.name} (ID: {current_author.id})"
-    current_details = (
-        "KNOWN DETAILS FROM THE CURRENT MESSAGE\n"
-        f"Thread user username: {current_author.name}\n"
-        f"Thread user ID: {current_author.id}\n"
-        f"Current message content: {current_content or '[no text]'}\n\n"
+    current_identity = (
+        f"name={current_author.name}, user_id={current_author.id}"
     )
+    current_details = (
+        "KNOWN THREAD USER\n"
+        f"username: {current_author.name}\n"
+        f"user_id: {current_author.id}\n\n"
+    )
+    current_content_ids = DISCORD_ID_PATTERN.findall(current_content)
+    if current_content_ids:
+        current_details += (
+            "POSSIBLE USER IDs IN CURRENT MESSAGE\n"
+            f"user_id candidates: {', '.join(current_content_ids)}\n\n"
+        )
     context_item = {
         "role": "developer",
         "content": _format_context(history),
