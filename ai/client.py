@@ -40,13 +40,18 @@ class AIClient:
         if settings.get("prompt"):
             system += f"\n\nSERVER PROMPT\n{settings['prompt']}"
 
+        model = settings.get("model") or DEFAULT_MODEL
+        allowed = set(settings.get("commands", []))
+        available_commands = sorted({"reply", "close", *allowed})
+        system += (
+            "\n\nAVAILABLE COMMAND NAMES\n"
+            + ", ".join(available_commands)
+            + "\nUse only these command names. Never invent a command name."
+        )
         messages = [
             {"role": "system", "content": system},
             *conversation,
         ]
-
-        model = settings.get("model") or DEFAULT_MODEL
-        allowed = set(settings.get("commands", []))
         await self._debug(
             thread,
             settings,
@@ -224,6 +229,10 @@ class AIClient:
 
         if not command:
             return "Command failed: invalid command arguments."
+
+        name = command.split(maxsplit=1)[0].lower()
+        if name not in {"reply", "close", *allowed}:
+            return f"Command denied: unknown command name: {name}"
 
         return await self.execute_command(
             command,

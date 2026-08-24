@@ -11,7 +11,8 @@ COMMAND_TOOL = {
             "Execute one complete ModMail command. Put the command name first, "
             "followed by its arguments separated by spaces. <value> means "
             "required and [value] means optional. Brackets are notation only and "
-            "must not be included in the command."
+            "must not be included in the command. Use only real command names "
+            "available in the current command list; never invent one."
         ),
         "parameters": {
             "type": "object",
