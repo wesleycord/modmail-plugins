@@ -26,7 +26,7 @@ class AIClient:
 
     async def respond(self, conversation, thread, settings, message):
         allowed = "\n".join(f"- {command}" for command in settings["commands"])
-        system = SYSTEM_PROMPT.format(commands=allowed or "None")
+        system = SYSTEM_PROMPT
         if settings.get("prompt"):
             system += f"\n\nSERVER PROMPT\n{settings['prompt']}"
 
@@ -39,7 +39,6 @@ class AIClient:
                 messages=messages,
                 tools=[COMMAND_TOOL],
             )
-            print(response, 1011)
             assistant = response.message
 
             if not assistant.tool_calls:
