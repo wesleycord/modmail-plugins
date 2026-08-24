@@ -93,6 +93,7 @@ class AI(commands.Cog):
                 if not log["ai"]:
                     return
 
+                await thread.channel.send("AI: Generating Response")
                 response = await self.client.respond(
                     build(log, message),
                     thread,
