@@ -135,8 +135,32 @@ class AI(commands.Cog):
         Set the default for new threads (owner):
         - `{prefix}ai default on`
         - `{prefix}ai default off`
+
+        View the current AI configuration and this thread's status:
+        - `{prefix}ai status`
         """
         await ctx.send_help(ctx.command)
+
+    @ai.command(name="status")
+    @checks.has_permissions(PermissionLevel.MODERATOR)
+    async def status(self, ctx):
+        """Show the AI assistant's current configuration and this thread's status."""
+        prompt = self.settings["prompt"]
+        lines = [
+            f"Model: `{self.settings['model']}`",
+            f"Default for new threads: **{'on' if self.settings['ai_default'] else 'off'}**",
+            f"Prompt: {'set (' + str(len(prompt)) + ' chars)' if prompt else 'not set'}",
+            "Allowed commands: " + (", ".join(self.settings["commands"]) or "none"),
+        ]
+
+        log = await self.bot.api.get_log(ctx.channel.id)
+        if log:
+            ai_enabled = log.get("ai", self.settings["ai_default"])
+            lines.insert(0, f"This thread: **{'enabled' if ai_enabled else 'disabled'}**")
+        else:
+            lines.insert(0, "This thread: not a Modmail thread")
+
+        await ctx.send("\n".join(lines))
 
     @ai.group(invoke_without_command=True)
     @checks.has_permissions(PermissionLevel.OWNER)
@@ -145,6 +169,7 @@ class AI(commands.Cog):
         await ctx.send(self.settings["prompt"] or "No custom prompt set")
 
     @prompt.command(name="set")
+    @checks.has_permissions(PermissionLevel.OWNER)
     async def prompt_set(self, ctx, *, value):
         """Set server-specific instructions for the AI."""
         self.settings["prompt"] = value.strip()[:4000]
@@ -152,6 +177,7 @@ class AI(commands.Cog):
         await ctx.send("AI prompt updated")
 
     @prompt.command(name="clear")
+    @checks.has_permissions(PermissionLevel.OWNER)
     async def prompt_clear(self, ctx):
         """Remove the server-specific AI prompt."""
         self.settings["prompt"] = ""
@@ -166,6 +192,7 @@ class AI(commands.Cog):
         await ctx.send("Allowed AI commands: " + (", ".join(allowed) or "none"))
 
     @command_list.command(name="add")
+    @checks.has_permissions(PermissionLevel.OWNER)
     async def command_add(self, ctx, *, value):
         """Add an implemented command to the AI allowlist."""
         value = value.strip().lower()
@@ -175,6 +202,7 @@ class AI(commands.Cog):
         await ctx.send(f"Allowed AI command: `{value}`")
 
     @command_list.command(name="remove")
+    @checks.has_permissions(PermissionLevel.OWNER)
     async def command_remove(self, ctx, *, value):
         """Remove a command from the AI allowlist."""
         value = value.strip().lower()
@@ -196,6 +224,7 @@ class AI(commands.Cog):
         await ctx.send("\n".join(lines) or "No Ollama models are installed")
 
     @models.command(name="set")
+    @checks.has_permissions(PermissionLevel.OWNER)
     async def model_set(self, ctx, *, value):
         """Select an installed Ollama model."""
         value = value.strip()
@@ -242,12 +271,14 @@ class AI(commands.Cog):
         await self._save()
 
     @ai_default.command(name="on", aliases=["enable"])
+    @checks.has_permissions(PermissionLevel.OWNER)
     async def ai_default_on(self, ctx):
         """Start AI enabled in new threads."""
         await self._set_default(True)
         await ctx.send("AI is on by default")
 
     @ai_default.command(name="off", aliases=["disable"])
+    @checks.has_permissions(PermissionLevel.OWNER)
     async def ai_default_off(self, ctx):
         """Start AI disabled in new threads."""
         await self._set_default(False)
