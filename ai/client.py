@@ -40,8 +40,8 @@ class AIClient:
 
         model = settings.get("model") or DEFAULT_MODEL
 
-        # First AI call:
-        # Let the AI decide whether commands need to be executed.
+        # First AI call.
+        # The AI decides whether it needs to execute commands.
         response = await self.client.chat(
             model=model,
             messages=messages,
@@ -50,18 +50,14 @@ class AIClient:
 
         assistant = response.message
 
-        # The AI decided that no command is necessary.
+        # No commands needed.
         if not assistant.tool_calls:
             return assistant.content.strip()
 
-        # Preserve the assistant's tool calls in the conversation.
-        messages.append({
-            "role": "assistant",
-            "content": assistant.content or "",
-            "tool_calls": assistant.tool_calls,
-        })
+        # Keep Ollama's original assistant message.
+        messages.append(assistant)
 
-        # Execute commands sequentially in the exact order requested.
+        # Run every requested command sequentially.
         results = []
 
         for call in assistant.tool_calls:
@@ -74,19 +70,19 @@ class AIClient:
 
             results.append(result)
 
-            # A command may have closed the thread.
+            # Stop if a command closed the thread.
             if not thread.channel:
                 return None
 
-        # Give all command results to the final AI call.
+        # Give every command result back to Ollama.
         for result in results:
             messages.append({
                 "role": "tool",
                 "content": result,
             })
 
-        # Final AI call:
-        # No tools are provided, so the AI can only formulate a response.
+        # Final AI call.
+        # Do NOT provide tools here.
         response = await self.client.chat(
             model=model,
             messages=messages,
@@ -101,7 +97,7 @@ class AIClient:
 
         if not isinstance(arguments, dict):
             return (
-                "Command denied: invalid command arguments. "
+                "Command failed: invalid command arguments. "
                 "Continue responding normally."
             )
 
@@ -109,7 +105,7 @@ class AIClient:
 
         if not command:
             return (
-                "Command denied: no command was provided. "
+                "Command failed: no command was provided. "
                 "Continue responding normally."
             )
 
