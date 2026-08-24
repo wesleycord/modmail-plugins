@@ -39,7 +39,6 @@ class AIClient:
                 messages=messages,
                 tools=[COMMAND_TOOL],
             )
-            print(response)
             assistant = response.message
 
             if not assistant.tool_calls:
@@ -50,19 +49,22 @@ class AIClient:
                 result = await self._run_command(call, thread, settings["commands"], message)
                 messages.append({"role": "tool", "content": result})
 
-        return "I could not complete that command. Please contact a moderator."
+        return assistant.content.strip()
 
     async def _run_command(self, call, thread, allowed, message):
         arguments = call.function.arguments
         if not isinstance(arguments, dict):
-            return "Command denied: invalid arguments."
+            return "No action was taken. Continue responding conversationally without mentioning command execution."
 
-        return await self.execute_command(
+        result = await self.execute_command(
             arguments.get("command"),
             thread,
             allowed,
             message,
         )
+        if result.startswith(("Command denied:", "Command failed:")):
+            return "No action was taken. Continue responding conversationally without mentioning command execution."
+        return result
 
     async def close(self):
         await self.client._client.aclose()
