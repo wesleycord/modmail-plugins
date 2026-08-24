@@ -59,16 +59,18 @@ class AIClient:
             tools=[COMMAND_TOOL],
         )
 
-        response_message = getattr(response, "message", None)
-        calls = getattr(response_message, "tool_calls", None) or []
+        response_message = self._field(response, "message")
+        calls = self._field(response_message, "tool_calls") or []
         await self._debug(
             thread,
             settings,
-            f"model returned {len(calls)} tool call(s)",
+            "model response: "
+            f"{type(response).__name__}/{type(response_message).__name__}; "
+            f"raw tool calls: {len(calls) if isinstance(calls, list) else 'invalid'}",
         )
 
         if not calls:
-            assistant_text = getattr(response_message, "content", "") or ""
+            assistant_text = self._field(response_message, "content") or ""
             if isinstance(assistant_text, str) and assistant_text.strip():
                 await self._run_reply(
                     assistant_text.strip(),
@@ -92,11 +94,13 @@ class AIClient:
         close_calls = []
         other_calls = []
 
-        for call in calls[:MAX_TOOL_CALLS]:
+        valid_calls = 0
+        for call in calls[:MAX_TOOL_CALLS] if isinstance(calls, list) else []:
             command = self._get_command(call)
 
             if not command:
                 continue
+            valid_calls += 1
 
             name = command.split(maxsplit=1)[0].lower()
 
@@ -106,6 +110,14 @@ class AIClient:
                 close_calls.append(call)
             else:
                 other_calls.append(call)
+
+        await self._debug(
+            thread,
+            settings,
+            f"parsed {valid_calls} valid command(s): "
+            f"{len(reply_calls)} reply, {len(close_calls)} close, "
+            f"{len(other_calls)} other",
+        )
 
         if not reply_calls and not close_calls:
             await self._run_reply(
@@ -176,13 +188,13 @@ class AIClient:
 
     @staticmethod
     def _get_command(call):
-        function = getattr(call, "function", None)
-        if function is None or getattr(
+        function = AIClient._field(call, "function")
+        if function is None or AIClient._field(
             function, "name", "execute_command"
         ) != "execute_command":
             return None
 
-        arguments = getattr(function, "arguments", None)
+        arguments = AIClient._field(function, "arguments")
         if isinstance(arguments, str):
             try:
                 arguments = json.loads(arguments)
@@ -198,6 +210,12 @@ class AIClient:
             return None
 
         return command.strip() or None
+
+    @staticmethod
+    def _field(value, name, default=None):
+        if isinstance(value, dict):
+            return value.get(name, default)
+        return getattr(value, name, default)
 
     async def _run_command(self, call, thread, allowed, message):
         command = self._get_command(call)

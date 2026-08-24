@@ -137,11 +137,12 @@ class AI(commands.Cog):
                         anonymous=False,
                         plain=False,
                     )
-            except Exception:
+            except Exception as error:
                 logger.exception("Failed to process AI message %s", message.id)
                 if self.settings.get("debug") and thread.channel:
                     await thread.channel.send(
-                        "**AI:** [DEBUG] response processing failed; check bot logs."
+                        "**AI:** [DEBUG] response processing failed: "
+                        f"{type(error).__name__}: {error}"
                     )
                 try:
                     await self.client._run_reply(
