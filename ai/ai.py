@@ -11,6 +11,8 @@ from .client import AIClient, DEFAULT_MODEL
 from .commands import execute_command
 from .conversation import build
 
+logger = getLogger(__name__)
+
 DEFAULT_SETTINGS = {
     "_id": "settings",
     "prompt": "",
@@ -104,7 +106,7 @@ class AI(commands.Cog):
                     message.author = self.bot.user
                     await thread.reply(message, response, anonymous=False, plain=False)
             except Exception:
-                self.bot.logger.exception("Failed to process AI message %s", message.id)
+                logger.exception("Failed to process AI message %s", message.id)
 
     @commands.group(name="ai", invoke_without_command=True)
     @checks.has_permissions(PermissionLevel.MODERATOR)
