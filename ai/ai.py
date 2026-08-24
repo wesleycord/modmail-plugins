@@ -111,7 +111,7 @@ class AI(commands.Cog):
                 if not log["ai"]:
                     return
 
-                await thread.channel.send("AI: Generating Response")
+                await thread.channel.send("**AI:** Generating Response")
                 response = await self.client.respond(
                     build(
                         log,
@@ -140,7 +140,9 @@ class AI(commands.Cog):
             except Exception:
                 logger.exception("Failed to process AI message %s", message.id)
                 if self.settings.get("debug") and thread.channel:
-                    await thread.channel.send("AI debug: response processing failed; check bot logs.")
+                    await thread.channel.send(
+                        "**AI:** [DEBUG] response processing failed; check bot logs."
+                    )
                 try:
                     await self.client._run_reply(
                         COMMAND_RESPONSE_FALLBACK,
@@ -200,7 +202,7 @@ class AI(commands.Cog):
             f"Model: `{self.settings['model']}`",
             f"Default for new threads: **{'on' if self.settings['ai_default'] else 'off'}**",
             f"Previous AI context: **{'on' if self.settings['include_ai_context'] else 'off'}**",
-            f"AI debug: **{'on' if self.settings['debug'] else 'off'}**",
+            f"**AI:** [DEBUG] **{'on' if self.settings['debug'] else 'off'}**",
         ]
 
         log = await self.bot.api.get_log(ctx.channel.id)

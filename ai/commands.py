@@ -69,7 +69,7 @@ async def execute_command(command, thread, allowed, message):
         if command not in allowed and name not in allowed:
             return "Command denied: it is not on the allowlist"
 
-    await thread.channel.send(f"Executing: {command}")
+    await thread.channel.send(f"**AI:** {command}")
 
     bot = thread.bot
 

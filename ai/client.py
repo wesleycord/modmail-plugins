@@ -32,7 +32,7 @@ class AIClient:
 
     async def _debug(self, thread, settings, text):
         if settings.get("debug") and thread.channel:
-            await thread.channel.send(f"AI debug: {text}")
+            await thread.channel.send(f"**AI:** [DEBUG] {text}")
 
     async def respond(self, conversation, thread, settings, message):
         system = SYSTEM_PROMPT
