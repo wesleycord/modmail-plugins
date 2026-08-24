@@ -5,7 +5,7 @@ from discord.ext import commands
 from dotenv import load_dotenv
 
 from core import checks
-from core.models import PermissionLevel
+from core.models import PermissionLevel, getLogger
 
 from .client import AIClient, DEFAULT_MODEL
 from .commands import execute_command
