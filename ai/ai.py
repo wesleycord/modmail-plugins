@@ -1,17 +1,18 @@
 import asyncio
+import logging
 from collections import defaultdict
 
 from discord.ext import commands
 from dotenv import load_dotenv
 
 from core import checks
-from core.models import PermissionLevel, getLogger
+from core.models import PermissionLevel
 
 from .client import AIClient, DEFAULT_MODEL
 from .commands import execute_command
 from .conversation import build
 
-logger = getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 DEFAULT_SETTINGS = {
     "_id": "settings",
