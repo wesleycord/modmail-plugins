@@ -97,7 +97,10 @@ def build(log, current_message):
         "role": "developer",
         "content": (
             "CONVERSATION CONTEXT. The original user request is marked clearly. "
-            "Use it with the later messages to resolve the user's issue. "
+            "Treat every included user message as available information and use "
+            "it with the later messages to resolve the user's issue. This includes "
+            "usernames, user IDs, message IDs, and other details already provided. "
+            "Never ask the user to provide a detail again when it appears here. "
             "Do not answer an old message instead of the current one:\n"
             + "\n".join(history)
         ),
@@ -105,7 +108,8 @@ def build(log, current_message):
     current_item = {
         "role": "user",
         "content": (
-            "CURRENT USER MESSAGE - answer only this message:\n"
+            "CURRENT USER MESSAGE - answer only this message. Use the conversation "
+            "context above and do not re-request details the user already provided:\n"
             f"User ({current_message.author.name}): "
             f"{current_content}"
         ),
@@ -124,7 +128,10 @@ def build(log, current_message):
         history_is_original.pop(remove_index)
         context_item["content"] = (
             "CONVERSATION CONTEXT. The original user request is marked clearly. "
-            "Use it with the later messages to resolve the user's issue. "
+            "Treat every included user message as available information and use "
+            "it with the later messages to resolve the user's issue. This includes "
+            "usernames, user IDs, message IDs, and other details already provided. "
+            "Never ask the user to provide a detail again when it appears here. "
             "Do not answer an old message instead of the current one:\n"
             + "\n".join(history)
         )

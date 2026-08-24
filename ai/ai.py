@@ -78,7 +78,11 @@ class AI(commands.Cog):
 
     @commands.Cog.listener()
     async def on_thread_reply(self, thread, is_mod, message, anonymous, plain):
-        if is_mod or message.author.bot or not message.content.strip():
+        if (
+            is_mod
+            or message.author.bot
+            or (not message.content.strip() and not message.attachments)
+        ):
             return
 
         async with self.locks[thread.channel.id]:
