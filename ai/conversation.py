@@ -59,9 +59,13 @@ def _author_details(message):
     return str(name), str(author_id) if author_id is not None else None
 
 
-def _message_kind(message):
+def _message_kind(message, ai_author_id=None):
     author = message.get("author") or {}
     author_data = author if isinstance(author, dict) else {}
+    author_id = author_data.get("id") or message.get("author_id")
+
+    if ai_author_id is not None and str(author_id) == str(ai_author_id):
+        return "AI"
 
     if (
         message.get("ai")
@@ -99,7 +103,7 @@ def _format_context(history):
     return CONTEXT_INSTRUCTIONS + entries
 
 
-def build(log, current_message, include_ai_context=True):
+def build(log, current_message, include_ai_context=True, ai_author_id=None):
     """Build context separately from the only message that needs an answer."""
     messages = log.get("messages", []) or []
     current_message_id = str(current_message.id)
@@ -113,7 +117,7 @@ def build(log, current_message, include_ai_context=True):
         if str(message.get("message_id")) == current_message_id:
             continue
 
-        kind = _message_kind(message)
+        kind = _message_kind(message, ai_author_id)
         if kind is None:
             continue
         if kind == "AI" and not include_ai_context:

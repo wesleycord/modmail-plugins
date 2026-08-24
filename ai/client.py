@@ -1,11 +1,13 @@
 import os
+import json
 
 from ollama import AsyncClient
 
 from .commands import COMMAND_TOOL
 from .prompts import SYSTEM_PROMPT
 
-DEFAULT_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2")
+DEFAULT_MODEL = os.getenv("OLLAMA_MODEL", "qwen3:8b")
+MAX_TOOL_CALLS = 4
 COMMAND_RESPONSE_FALLBACK = (
     "Sorry, I encountered an unexpected issue while processing your request. "
     "Please contact a server administrator for assistance."
@@ -63,7 +65,7 @@ class AIClient:
         close_calls = []
         other_calls = []
 
-        for call in calls:
+        for call in calls[:MAX_TOOL_CALLS]:
             command = self._get_command(call)
 
             if not command:
@@ -143,7 +145,18 @@ class AIClient:
 
     @staticmethod
     def _get_command(call):
-        arguments = call.function.arguments
+        function = getattr(call, "function", None)
+        if function is None or getattr(
+            function, "name", "execute_command"
+        ) != "execute_command":
+            return None
+
+        arguments = getattr(function, "arguments", None)
+        if isinstance(arguments, str):
+            try:
+                arguments = json.loads(arguments)
+            except json.JSONDecodeError:
+                return None
 
         if not isinstance(arguments, dict):
             return None

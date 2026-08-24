@@ -113,11 +113,26 @@ class AI(commands.Cog):
                         log,
                         message,
                         include_ai_context=self.settings["include_ai_context"],
+                        ai_author_id=self.bot.user.id,
                     ),
                     thread,
                     self.settings,
                     message,
                 )
+                if response:
+                    reply_message = copy.copy(message)
+                    reply_message.author = self.bot.user
+                    reply_message.content = response
+                    reply_message.attachments = []
+                    reply_message.embeds = []
+                    reply_message.stickers = []
+                    reply_message.message_snapshots = []
+                    await thread.reply(
+                        reply_message,
+                        response,
+                        anonymous=False,
+                        plain=False,
+                    )
             except Exception:
                 logger.exception("Failed to process AI message %s", message.id)
                 try:
