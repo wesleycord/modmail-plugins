@@ -1,4 +1,5 @@
 import asyncio
+import copy
 import logging
 from collections import defaultdict
 
@@ -107,9 +108,6 @@ class AI(commands.Cog):
                     self.settings,
                     message,
                 )
-                if response:
-                    message.author = self.bot.user
-                    await thread.reply(message, response, anonymous=False, plain=False)
             except Exception:
                 logger.exception("Failed to process AI message %s", message.id)
 
