@@ -1,3 +1,4 @@
+import asyncio
 import os
 
 from ollama import AsyncClient
@@ -6,7 +7,7 @@ from .commands import COMMAND_TOOL, execute_command
 from .prompts import SYSTEM_PROMPT
 
 DEFAULT_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2")
-MAX_CALLS = 3
+MAX_CALLS = 2
 COMMAND_RESPONSE_FALLBACK = "I've taken care of that. Is there anything else I can help with?"
 
 
@@ -26,7 +27,6 @@ class AIClient:
         return [model.model for model in response.models]
 
     async def respond(self, conversation, thread, settings, message):
-        allowed = "\n".join(f"- {command}" for command in settings["commands"])
         system = SYSTEM_PROMPT
         if settings.get("prompt"):
             system += f"\n\nSERVER PROMPT\n{settings['prompt']}"
@@ -46,8 +46,19 @@ class AIClient:
                 return assistant.content.strip()
 
             messages.append(assistant)
-            for call in assistant.tool_calls:
-                result = await self._run_command(call, thread, settings["commands"], message)
+
+            # Run every tool call requested in this turn concurrently
+            # instead of one at a time. If the model asks for 3 commands,
+            # they all execute in parallel, so the round-trip only costs
+            # as much as the slowest single command instead of the sum
+            # of all of them.
+            results = await asyncio.gather(
+                *(
+                    self._run_command(call, thread, settings["commands"], message)
+                    for call in assistant.tool_calls
+                )
+            )
+            for result in results:
                 messages.append({"role": "tool", "content": result})
 
         return assistant.content.strip() or COMMAND_RESPONSE_FALLBACK
