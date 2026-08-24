@@ -154,7 +154,6 @@ class AIClient:
                 allowed,
                 message,
             )
-            await self._debug(thread, settings, f"reply result: {result}")
             successful_reply |= self._command_succeeded(result)
 
         # Close can be used with or without reply.
