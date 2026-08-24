@@ -1,104 +1,164 @@
-import copy
+import os
 
-from discord.ext import commands
+from ollama import AsyncClient
 
+from .commands import COMMAND_TOOL
+from .prompts import SYSTEM_PROMPT
 
-COMMAND_TOOL = {
-    "type": "function",
-    "function": {
-        "name": "execute_command",
-        "description": (
-            "Execute a ModMail command. "
-            "For every user message, execute at least one user-facing command: "
-            "reply or close. "
-            "reply and close are always allowed and may both be used. "
-            "If both are used, reply must come before close. "
-            "Other commands are only allowed when they are present in the "
-            "server command allowlist."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "command": {
-                    "type": "string",
-                    "description": (
-                        "The complete ModMail command. "
-                        "Use one of these formats:\n"
-                        "- reply <response>\n"
-                        "- close\n"
-                        "- close <time>\n"
-                        "- close <reason>\n"
-                        "- close <time> <reason>\n\n"
-                        "For close, time and reason are both optional and "
-                        "can be provided independently. "
-                        "Time uses durations such as 5h30m.\n\n"
-                        "Examples:\n"
-                        "reply Thanks for the report!\n"
-                        "close\n"
-                        "close 5h30m\n"
-                        "close No further information was provided\n"
-                        "close 5h30m No further information was provided"
-                    ),
-                },
-            },
-            "required": ["command"],
-            "additionalProperties": False,
-        },
-    },
-}
+DEFAULT_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2")
+COMMAND_RESPONSE_FALLBACK = (
+    "Sorry, I encountered an unexpected issue while processing your request. "
+    "Please contact a server administrator for assistance."
+)
 
 
-async def execute_command(command, thread, allowed, message):
-    """Run an AI command when it is allowed."""
+class AIClient:
+    """Ollama client for AI-driven Modmail command execution."""
 
-    if not isinstance(command, str):
-        return "Command denied: invalid command"
+    def __init__(self, execute_command):
+        url = os.getenv("OLLAMA_URL")
 
-    command = command.strip()
+        if not url:
+            raise RuntimeError("Missing OLLAMA_URL in environment variables")
 
-    if not command:
-        return "Command failed: no command was provided"
+        self.client = AsyncClient(host=url.rstrip("/"))
+        self.execute_command = execute_command
 
-    name = command.split(maxsplit=1)[0].lower()
+    async def models(self):
+        response = await self.client.list()
+        return [model.model for model in response.models]
 
-    # These commands are always available to the AI.
-    if name not in {"reply", "close"}:
-        if command not in allowed and name not in allowed:
-            return "Command denied: it is not on the allowlist"
+    async def respond(self, conversation, thread, settings, message):
+        system = SYSTEM_PROMPT
 
-    await thread.channel.send(f"Executing: {command}")
+        if settings.get("prompt"):
+            system += f"\n\nSERVER PROMPT\n{settings['prompt']}"
 
-    bot = thread.bot
+        messages = [
+            {"role": "system", "content": system},
+            *conversation,
+        ]
 
-    command_message = copy.copy(message)
-    command_message.content = f"{bot.prefix}{command}"
-    command_message.channel = thread.channel
+        model = settings.get("model") or DEFAULT_MODEL
+        allowed = set(settings.get("commands", []))
 
-    context = await bot.get_context(command_message)
-    context.thread = thread
+        response = await self.client.chat(
+            model=model,
+            messages=messages,
+            tools=[COMMAND_TOOL],
+        )
 
-    if context.command is None:
-        return f"Command failed: {command} — command was not found"
+        calls = response.message.tool_calls or []
 
-    try:
-        command_message.author = bot.user
+        if not calls:
+            await self._run_reply(
+                COMMAND_RESPONSE_FALLBACK,
+                thread,
+                allowed,
+                message,
+            )
+            return None
 
-        if not await bot.can_run(context, call_once=True):
-            return (
-                f"Command failed: {command} — "
-                "bot is not allowed to run it"
+        reply_calls = []
+        close_calls = []
+        other_calls = []
+
+        for call in calls:
+            command = self._get_command(call)
+
+            if not command:
+                continue
+
+            name = command.split(maxsplit=1)[0].lower()
+
+            if name == "reply":
+                reply_calls.append(call)
+            elif name == "close":
+                close_calls.append(call)
+            else:
+                other_calls.append(call)
+
+        # Execute other commands first.
+        for call in other_calls:
+            if not thread.channel:
+                break
+
+            await self._run_command(
+                call,
+                thread,
+                allowed,
+                message,
             )
 
-        await context.command.invoke(context)
+        # Reply always happens before close.
+        for call in reply_calls:
+            if not thread.channel:
+                break
 
-    except commands.CommandError as error:
-        return f"Command failed: {command} — {error}"
+            await self._run_command(
+                call,
+                thread,
+                allowed,
+                message,
+            )
 
-    except Exception as error:
-        bot.logger.exception("AI command failed: %s", command)
-        return f"Command failed: {command} — {error}"
+        # Close can be used with or without reply.
+        for call in close_calls:
+            if not thread.channel:
+                break
 
-    if context.command_failed:
-        return f"Command failed: {command}"
+            await self._run_command(
+                call,
+                thread,
+                allowed,
+                message,
+            )
 
-    return f"Command executed: {command}"
+        # Ensure every response produces a user-facing action.
+        if not reply_calls and not close_calls and thread.channel:
+            await self._run_reply(
+                COMMAND_RESPONSE_FALLBACK,
+                thread,
+                allowed,
+                message,
+            )
+
+        return None
+
+    @staticmethod
+    def _get_command(call):
+        arguments = call.function.arguments
+
+        if not isinstance(arguments, dict):
+            return None
+
+        command = arguments.get("command")
+
+        if not isinstance(command, str):
+            return None
+
+        return command.strip() or None
+
+    async def _run_command(self, call, thread, allowed, message):
+        command = self._get_command(call)
+
+        if not command:
+            return "Command failed: invalid command arguments."
+
+        return await self.execute_command(
+            command,
+            thread,
+            allowed,
+            message,
+        )
+
+    async def _run_reply(self, content, thread, allowed, message):
+        return await self.execute_command(
+            f"reply {content}",
+            thread,
+            allowed,
+            message,
+        )
+
+    async def close(self):
+        await self.client._client.aclose()
