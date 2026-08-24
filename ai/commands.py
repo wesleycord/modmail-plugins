@@ -9,12 +9,15 @@ COMMAND_TOOL = {
         "name": "execute_command",
         "description": (
             "Execute a ModMail command. "
-            "For every user message, execute at least one user-facing command: "
-            "reply or close. "
-            "reply and close are always allowed and may both be used. "
-            "If both are used, reply must come before close. "
+            "For every user message, execute at least one user-facing command "
+            "using reply or close. "
+            "reply and close are always allowed and may both be used; if both "
+            "are used, reply must come before close. "
             "Other commands are only allowed when they are present in the "
             "server command allowlist. "
+            "Command syntax: <value> is required and [value] is optional. "
+            "Never include the angle brackets or square brackets in the command. "
+            "A reply must always include a non-empty response. "
             "Be extremely careful with close: NEVER close a thread unless "
             "the current user message explicitly requests, confirms, or "
             "clearly instructs that the thread should be closed. "
@@ -28,17 +31,20 @@ COMMAND_TOOL = {
             "properties": {
                 "command": {
                     "type": "string",
+                    "minLength": 1,
                     "description": (
-                        "The complete ModMail command. "
-                        "Use one of these formats:\n"
+                        "The complete ModMail command. In the syntax below, "
+                        "<value> is required and [value] is optional; do not "
+                        "include the brackets in the command. Use one of these "
+                        "formats:\n"
                         "- reply <response>\n"
-                        "- close\n"
-                        "- close <time>\n"
-                        "- close <reason>\n"
-                        "- close <time> <reason>\n\n"
-                        "For close, time and reason are both optional and "
-                        "can be provided independently. "
-                        "Time uses durations such as 5h30m.\n\n"
+                        "- close [time] [reason]\n\n"
+                        "For close, both arguments are optional and can be used "
+                        "independently. If the first argument is a duration such "
+                        "as 5h30m, it is treated as <time>; otherwise it is "
+                        "treated as <reason>. A second argument is always "
+                        "treated as <reason>.\n\n"
+                        "A reply without <response> is invalid.\n\n"
                         "IMPORTANT: Only use a close command when the user "
                         "explicitly asks or clearly confirms that the thread "
                         "should be closed. Never close based on assumptions, "
@@ -72,6 +78,9 @@ async def execute_command(command, thread, allowed, message):
         return "Command failed: no command was provided"
 
     name = command.split(maxsplit=1)[0].lower()
+
+    if name == "reply" and len(command.split(maxsplit=1)) == 1:
+        return "Command failed: reply requires a non-empty response"
 
     # These commands are always available to the AI.
     if name not in {"reply", "close"}:
