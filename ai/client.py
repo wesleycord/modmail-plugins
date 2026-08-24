@@ -34,20 +34,20 @@ class AIClient:
         if settings.get("debug") and thread.channel:
             await thread.channel.send(f"**AI:** [DEBUG] {text}")
 
-    async def _chat(self, chat_options):
+    async def _chat(self, chat_options, available_commands):
         """Send one chat request and return (commands, raw content, response type name)."""
         response = await self.client.chat(**chat_options)
         response_message = self._field(response, "message")
         content = self._field(response_message, "content") or ""
         content = content.strip() if isinstance(content, str) else ""
         return (
-            self._parse_commands(content),
+            self._parse_commands(content, available_commands),
             content,
             f"{type(response).__name__}/{type(response_message).__name__}",
         )
 
     @staticmethod
-    def _parse_commands(content):
+    def _parse_commands(content, available_commands):
         if not content:
             return []
 
@@ -59,15 +59,37 @@ class AIClient:
         if not isinstance(data, dict):
             return []
 
-        commands = data.get("commands")
-        if not isinstance(commands, list):
+        raw_commands = data.get("commands")
+        if not isinstance(raw_commands, list):
             return []
 
-        return [
-            command.strip()
-            for command in commands
-            if isinstance(command, str) and command.strip()
+        entries = [
+            entry.strip()
+            for entry in raw_commands
+            if isinstance(entry, str) and entry.strip()
         ]
+
+        # Defensively merge cases where the model splits a bare command name
+        # (e.g. "reply") and its message text into two separate array entries.
+        commands = []
+        index = 0
+        while index < len(entries):
+            entry = entries[index]
+            name = entry.split(maxsplit=1)[0].lower()
+            is_bare = " " not in entry and name in available_commands
+            next_entry = entries[index + 1] if index + 1 < len(entries) else None
+            next_is_command = (
+                next_entry is not None
+                and next_entry.split(maxsplit=1)[0].lower() in available_commands
+            )
+            if is_bare and next_entry is not None and not next_is_command:
+                commands.append(f"{entry} {next_entry}")
+                index += 2
+            else:
+                commands.append(entry)
+                index += 1
+
+        return commands
 
     async def respond(self, conversation, thread, settings, message):
         system = SYSTEM_PROMPT
@@ -78,6 +100,7 @@ class AIClient:
         model = settings.get("model") or DEFAULT_MODEL
         allowed = set(settings.get("commands", []))
         available_commands = sorted({"reply", "close", *allowed})
+        available_commands_set = set(available_commands)
         system += "\n\n" + build_command_prompt(available_commands)
         messages = [
             {"role": "system", "content": system},
@@ -97,7 +120,7 @@ class AIClient:
             # instead of chain-of-thought reasoning.
             "think": True,
         }
-        commands, content, response_type = await self._chat(chat_options)
+        commands, content, response_type = await self._chat(chat_options, available_commands_set)
         commands = commands[:MAX_TOOL_CALLS]
 
         await self._debug(
@@ -144,7 +167,7 @@ class AIClient:
                 },
             ]
             retry_commands, retry_content, retry_type = await self._chat(
-                {**chat_options, "messages": retry_messages}
+                {**chat_options, "messages": retry_messages}, available_commands_set
             )
             retry_commands = retry_commands[:MAX_TOOL_CALLS]
             await self._debug(

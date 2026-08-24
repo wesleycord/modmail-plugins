@@ -12,11 +12,13 @@ COMMANDS_SCHEMA = {
             "type": "array",
             "description": (
                 "One or more complete ModMail commands to run, in order. Each "
-                "command string starts with the command name, followed by its "
-                "arguments separated by spaces. <value> means required and "
-                "[value] means optional; brackets are notation only and must "
-                "not be included. Use only real command names available in "
-                "the current command list; never invent one."
+                "array element is ONE ENTIRE command string: the command name "
+                "followed by all of its arguments in the same string, separated "
+                "by spaces (e.g. 'reply Thanks for reaching out!'). Never split a "
+                "command name and its arguments across two array elements. "
+                "<value> means required and [value] means optional; brackets are "
+                "notation only and must not be included. Use only real command "
+                "names available in the current command list; never invent one."
             ),
             "items": {"type": "string", "minLength": 1},
             "minItems": 1,
@@ -32,11 +34,16 @@ Respond with exactly one JSON object: {"commands": ["<command>", ...]}. List
 one or more complete commands to run in order. Output nothing else — no
 prose, no explanation, no text outside the JSON object.
 
+Each array element is ONE ENTIRE command, name and arguments together in a
+single string. Never split a command across two array elements — this is
+WRONG: ["reply", "Thanks for reaching out!"]. This is CORRECT:
+["reply Thanks for reaching out!"].
+
 At least one command must be `reply` or `close`. Only use command names
 exactly as listed under AVAILABLE COMMAND NAMES below; inventing a command
 (e.g. "ask", "report_user") is rejected and wastes the response. `reply`
-always needs real text after it (e.g. "reply Thanks for reaching out!");
-never send `reply` alone.
+always needs real text after it, in the same string (e.g.
+"reply Thanks for reaching out!"); never send `reply` alone.
 
 Default to `reply`. Only use `close` when the user clearly confirms the
 issue is resolved or needs no further help, or is abusive/off-topic with
