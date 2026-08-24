@@ -8,13 +8,9 @@ COMMAND_TOOL = {
     "function": {
         "name": "execute_command",
         "description": (
-            "Execute one or more ModMail commands for the current user message. "
-            "Always use reply or close for a user-facing result. Both may be used, "
-            "but reply must come before close. Other commands require the server "
-            "allowlist. Syntax uses <required> and [optional] placeholders; do "
-            "not include the brackets. reply requires non-empty text. Only close "
-            "when the current user explicitly asks or clearly confirms it; never "
-            "infer close from thanks, resolution, inactivity, or conversation end."
+            "Use this tool to execute a ModMail command. "
+            "In the command formats, <value> means required and [value] means "
+            "optional. Do not include the brackets in the command."
         ),
         "parameters": {
             "type": "object",
@@ -22,23 +18,7 @@ COMMAND_TOOL = {
                 "command": {
                     "type": "string",
                     "minLength": 1,
-                    "description": (
-                        "Complete command. <value> is required and [value] is "
-                        "optional; do not include brackets. Formats:\n"
-                        "- reply <response>\n"
-                        "- close\n"
-                        "- close <silent|silently|cancel>\n"
-                        "- close <silent|silently> <duration>\n\n"
-                        "For close, use only the forms above. A duration uses "
-                        "formats such as 5h30m. Close only on an explicit user "
-                        "request; do not add a reason because the command does "
-                        "not support one.\n\n"
-                        "Examples:\n"
-                        "reply Thanks for the report!\n"
-                        "close\n"
-                        "close silent\n"
-                        "close silently 5h30m"
-                    ),
+                    "description": "The bot command to execute such as 'reply <message>' or 'close [time] [reason]' for example",
                 },
             },
             "required": ["command"],

@@ -61,6 +61,7 @@ class AIClient:
 
         response_message = self._field(response, "message")
         calls = self._field(response_message, "tool_calls") or []
+        content = self._field(response_message, "content") or ""
         await self._debug(
             thread,
             settings,
@@ -69,16 +70,12 @@ class AIClient:
             f"raw tool calls: {len(calls) if isinstance(calls, list) else 'invalid'}",
         )
 
+        if isinstance(content, str) and content.strip():
+            await thread.channel.send(f"**AI:** {content.strip()}")
+            await self._debug(thread, settings, "model content sent to thread")
+
         if not calls:
-            assistant_text = self._field(response_message, "content") or ""
-            if isinstance(assistant_text, str) and assistant_text.strip():
-                await self._run_reply(
-                    assistant_text.strip(),
-                    thread,
-                    allowed,
-                    message,
-                )
-                await self._debug(thread, settings, "text response sent")
+            if isinstance(content, str) and content.strip():
                 return None
 
             await self._run_reply(
@@ -87,7 +84,11 @@ class AIClient:
                 allowed,
                 message,
             )
-            await self._debug(thread, settings, "empty model response; fallback sent")
+            await self._debug(
+                thread,
+                settings,
+                "model returned no tool calls; fallback tool command sent",
+            )
             return None
 
         reply_calls = []
