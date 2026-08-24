@@ -6,7 +6,7 @@ from .commands import COMMAND_TOOL, execute_command
 from .prompts import SYSTEM_PROMPT
 
 DEFAULT_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2")
-MAX_TOOL_CALLS = 5
+MAX_CALLS = 3
 COMMAND_RESPONSE_FALLBACK = "I've taken care of that. Is there anything else I can help with?"
 
 
@@ -34,7 +34,7 @@ class AIClient:
         messages = [{"role": "system", "content": system}, *conversation]
         model = settings.get("model") or DEFAULT_MODEL
 
-        for _ in range(MAX_TOOL_CALLS):
+        for _ in range(MAX_CALLS):
             response = await self.client.chat(
                 model=model,
                 messages=messages,
