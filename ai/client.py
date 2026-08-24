@@ -58,11 +58,15 @@ class AIClient:
             f"request started using {model}; context messages: {len(conversation)}",
         )
 
-        response = await self.client.chat(
-            model=model,
-            messages=messages,
-            tools=[COMMAND_TOOL],
-        )
+        chat_options = {
+            "model": model,
+            "messages": messages,
+            "tools": [COMMAND_TOOL],
+        }
+        if model.lower().startswith("qwen3"):
+            chat_options["think"] = False
+
+        response = await self.client.chat(**chat_options)
 
         response_message = self._field(response, "message")
         calls = self._field(response_message, "tool_calls") or []
