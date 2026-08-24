@@ -39,6 +39,7 @@ class AIClient:
                 messages=messages,
                 tools=[COMMAND_TOOL],
             )
+            print(response)
             assistant = response.message
 
             if not assistant.tool_calls:
