@@ -89,7 +89,7 @@ class ThreadMenu(commands.Cog):
             name="Category", value=category.mention if category else "Default", inline=False
         )
 
-        if option.get("type") == "run_command":
+        if option.get("type") == "command":
             embed.add_field(name="Runs Command", value=f"`{option.get('callback')}`", inline=False)
 
         if option.get("team"):
@@ -473,7 +473,7 @@ class ThreadMenu(commands.Cog):
             ))
 
         if alias:
-            options[key]["type"] = "run_command"
+            options[key]["type"] = "command"
             options[key]["callback"] = alias
         else:
             options[key]["type"] = "message"
@@ -531,14 +531,14 @@ class ThreadMenu(commands.Cog):
     async def on_thread_ready(self, thread, creator, category, initial_message):
         """Run a menu option's linked command ourselves, bypassing core's
         manual Context construction, which can fail to resolve overridden
-        commands. We use `"run_command"` (not `"command"`) as the stored
+        commands. We use `"command"` (not `"command"`) as the stored
         type so core's own built-in invocation never fires for these too.
         """
         option = getattr(thread, "_selected_thread_creation_menu_option", None)
         if not isinstance(option, dict):
             return
 
-        if option.get("type") != "run_command":
+        if option.get("type") != "command":
             return
 
         alias = option.get("callback")
