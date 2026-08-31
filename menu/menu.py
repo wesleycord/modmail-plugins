@@ -562,33 +562,32 @@ class ThreadMenu(commands.Cog):
 
         from core.models import DummyMessage
 
-        synthetic = DummyMessage(copy.copy(source_message))
-        synthetic.author = self.bot.modmail_guild.me or self.bot.user
-        synthetic.channel = thread.channel
-        synthetic.guild = thread.channel.guild
-        synthetic.content = alias
-
-        ctx = commands.Context(
-            bot=self.bot,
-            view=StringView(remaining),
-            prefix=self.bot.prefix,
-            message=synthetic,
-        )
-        ctx.command = command
-        ctx.invoked_with = command.qualified_name
-        ctx.thread = thread
-
-        old_checks = list(command.checks)
-        command.checks = []
         try:
+            synthetic = DummyMessage(copy.copy(source_message))
+            synthetic.author = self.bot.modmail_guild.me or self.bot.user
+            synthetic.channel = thread.channel
+            synthetic.guild = thread.channel.guild
+            synthetic.content = alias
+
+            ctx = commands.Context(
+                bot=self.bot,
+                view=StringView(remaining),
+                prefix=self.bot.prefix,
+                message=synthetic,
+            )
+            ctx.command = command
+            ctx.invoked_with = command.qualified_name
+            ctx.thread = thread
+
+            # Invoke command directly without temporarily clearing checks.
+            # This avoids threading issues and properly respects all decorators.
             await command.invoke(ctx)
-        except commands.CommandError as exc:
+        except Exception as exc:
+            error_msg = str(exc) if str(exc) else type(exc).__name__
             await thread.channel.send(embed=discord.Embed(
                 color=self.bot.error_color,
-                description=f"Menu command `{alias}` failed: {exc}",
+                description=f"Menu command `{alias}` failed: {error_msg}",
             ))
-        finally:
-            command.checks = old_checks
 
 
 
