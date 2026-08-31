@@ -1,5 +1,3 @@
-from typing import Union
-
 import discord
 from discord.ext import commands
 
@@ -29,6 +27,33 @@ class Teams(commands.Cog):
 
     def find_team(self, name):
         return self.teams.get(name.strip().lower())
+
+    def match_team(self, text):
+        """Find a team at the start of `text`, trying the longest word match first.
+
+        Returns a `(team, rest)` tuple, where `rest` is whatever followed the
+        matched team name. This allows multi-word team names to be used
+        without quoting them.
+        """
+        words = text.split()
+        for i in range(len(words), 0, -1):
+            team = self.teams.get(" ".join(words[:i]).lower())
+            if team:
+                return team, " ".join(words[i:])
+        return None, text
+
+    @staticmethod
+    async def convert_role_member_user(ctx, text):
+        for converter in (
+            commands.RoleConverter,
+            commands.MemberConverter,
+            commands.UserConverter,
+        ):
+            try:
+                return await converter().convert(ctx, text)
+            except commands.BadArgument:
+                continue
+        return None
 
     async def save_team(self, team):
         await self.coll.find_one_and_update(
@@ -173,18 +198,30 @@ class Teams(commands.Cog):
 
     @team.command(name="category")
     @checks.has_permissions(PermissionLevel.ADMINISTRATOR)
-    async def team_category(
-        self, ctx, team_name: str, *, category: discord.CategoryChannel
-    ):
+    async def team_category(self, ctx, *, arguments: str):
         """Set the category a team moves threads into.
 
-        Quote `team_name` if it contains spaces, e.g. `"senior mod team"`.
+        Example: `{prefix}team category Admin Team #admin-category`
         """
-        team = self.find_team(team_name)
+        team, rest = self.match_team(arguments)
         if not team:
             return await ctx.send(embed=discord.Embed(
                 color=self.bot.error_color,
-                description=f"No team named `{team_name}` exists.",
+                description="No matching team found in that command.",
+            ))
+
+        if not rest:
+            return await ctx.send(embed=discord.Embed(
+                color=self.bot.error_color,
+                description="Provide a category.",
+            ))
+
+        try:
+            category = await commands.CategoryChannelConverter().convert(ctx, rest)
+        except commands.BadArgument:
+            return await ctx.send(embed=discord.Embed(
+                color=self.bot.error_color,
+                description=f"Could not find a category matching `{rest}`.",
             ))
 
         team["category_id"] = category.id
@@ -196,25 +233,32 @@ class Teams(commands.Cog):
 
     @team.command(name="permission", aliases=["perm", "permissions", "perms"])
     @checks.has_permissions(PermissionLevel.ADMINISTRATOR)
-    async def team_permission(
-        self,
-        ctx,
-        team_name: str,
-        role: discord.Role,
-        action: str,
-        *perms: str,
-    ):
+    async def team_permission(self, ctx, *, arguments: str):
         """Set channel permission overwrites for a role for this team.
 
-        `action` must be `allow`, `deny`, or `reset`.
-        Quote `team_name` if it contains spaces, e.g. `"senior mod team"`.
-        Example: `{prefix}team permission uefn @UEFN-Team allow view_channel send_messages`
+        Example: `{prefix}team permission Admin Team @Admins allow view_channel send_messages`
         """
-        team = self.find_team(team_name)
+        team, rest = self.match_team(arguments)
         if not team:
             return await ctx.send(embed=discord.Embed(
                 color=self.bot.error_color,
-                description=f"No team named `{team_name}` exists.",
+                description="No matching team found in that command.",
+            ))
+
+        parts = rest.split()
+        if len(parts) < 2:
+            return await ctx.send(embed=discord.Embed(
+                color=self.bot.error_color,
+                description="Provide a role and an action (`allow`, `deny`, or `reset`).",
+            ))
+
+        role_text, action, *perms = parts
+        try:
+            role = await commands.RoleConverter().convert(ctx, role_text)
+        except commands.BadArgument:
+            return await ctx.send(embed=discord.Embed(
+                color=self.bot.error_color,
+                description=f"Could not find a role matching `{role_text}`.",
             ))
 
         action = action.lower()
@@ -263,31 +307,38 @@ class Teams(commands.Cog):
 
     @team.command(name="mentions", aliases=["mention", "ping"])
     @checks.has_permissions(PermissionLevel.ADMINISTRATOR)
-    async def team_mentions(
-        self,
-        ctx,
-        team_name: str,
-        action: str,
-        *,
-        target: Union[discord.Role, discord.Member, discord.User],
-    ):
+    async def team_mentions(self, ctx, *, arguments: str):
         """Add or remove a role/user to mention when a thread is moved to this team.
 
-        `action` must be `add` or `remove`.
-        Quote `team_name` if it contains spaces, e.g. `"senior mod team"`.
+        Example: `{prefix}team mentions Admin Team add @Admins`
         """
-        team = self.find_team(team_name)
+        team, rest = self.match_team(arguments)
         if not team:
             return await ctx.send(embed=discord.Embed(
                 color=self.bot.error_color,
-                description=f"No team named `{team_name}` exists.",
+                description="No matching team found in that command.",
             ))
 
+        parts = rest.split(maxsplit=1)
+        if len(parts) < 2:
+            return await ctx.send(embed=discord.Embed(
+                color=self.bot.error_color,
+                description="Provide an action (`add` or `remove`) and a role or user.",
+            ))
+
+        action, target_text = parts
         action = action.lower()
         if action not in ("add", "remove"):
             return await ctx.send(embed=discord.Embed(
                 color=self.bot.error_color,
                 description="`action` must be `add` or `remove`.",
+            ))
+
+        target = await self.convert_role_member_user(ctx, target_text)
+        if target is None:
+            return await ctx.send(embed=discord.Embed(
+                color=self.bot.error_color,
+                description=f"Could not find a role or user matching `{target_text}`.",
             ))
 
         mention_type = "role" if isinstance(target, discord.Role) else "user"
@@ -310,20 +361,20 @@ class Teams(commands.Cog):
 
     @team.command(name="response")
     @checks.has_permissions(PermissionLevel.ADMINISTRATOR)
-    async def team_response(self, ctx, team_name: str, *, message: str = None):
+    async def team_response(self, ctx, *, arguments: str):
         """Set the message sent to the user when a thread is moved to this team.
 
-        Quote `team_name` if it contains spaces, e.g. `"senior mod team"`.
-        Leave `message` empty to clear it.
+        Leave the message empty to clear it.
+        Example: `{prefix}team response Admin Team You have been moved to the admin team.`
         """
-        team = self.find_team(team_name)
+        team, message = self.match_team(arguments)
         if not team:
             return await ctx.send(embed=discord.Embed(
                 color=self.bot.error_color,
-                description=f"No team named `{team_name}` exists.",
+                description="No matching team found in that command.",
             ))
 
-        team["response"] = message
+        team["response"] = message or None
         await self.save_team(team)
         await ctx.send(embed=discord.Embed(
             color=self.bot.main_color,
@@ -332,20 +383,20 @@ class Teams(commands.Cog):
 
     @team.command(name="note")
     @checks.has_permissions(PermissionLevel.ADMINISTRATOR)
-    async def team_note(self, ctx, team_name: str, *, message: str = None):
+    async def team_note(self, ctx, *, arguments: str):
         """Set the staff-only note sent in the thread channel when moved to this team.
 
-        Quote `team_name` if it contains spaces, e.g. `"senior mod team"`.
-        Leave `message` empty to clear it.
+        Leave the message empty to clear it.
+        Example: `{prefix}team note Admin Team Escalate to an admin ASAP.`
         """
-        team = self.find_team(team_name)
+        team, message = self.match_team(arguments)
         if not team:
             return await ctx.send(embed=discord.Embed(
                 color=self.bot.error_color,
-                description=f"No team named `{team_name}` exists.",
+                description="No matching team found in that command.",
             ))
 
-        team["note"] = message
+        team["note"] = message or None
         await self.save_team(team)
         await ctx.send(embed=discord.Embed(
             color=self.bot.main_color,
