@@ -142,3 +142,22 @@ async def restricted_logs_search_callback(core_cog, ctx, limit=None, *, query):
 
     session = EmbedPaginatorSession(ctx, *embeds)
     await session.run()
+
+
+class TeamLogCallbacks:
+    """Cog-shaped adapters that preserve Modmail's original command parsing."""
+
+    async def logs(core_cog, ctx, *, user=None):
+        return await restricted_logs_callback(core_cog, ctx, user)
+
+    async def closed_by(core_cog, ctx, *, user=None):
+        return await restricted_logs_closed_by_callback(core_cog, ctx, user)
+
+    async def key(core_cog, ctx, key):
+        return await restricted_logs_key_callback(core_cog, ctx, key)
+
+    async def responded(core_cog, ctx, *, user=None):
+        return await restricted_logs_responded_callback(core_cog, ctx, user)
+
+    async def search(core_cog, ctx, limit=None, *, query):
+        return await restricted_logs_search_callback(core_cog, ctx, limit, query=query)

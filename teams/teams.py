@@ -10,13 +10,7 @@ from core.models import PermissionLevel
 
 from . import team_helpers
 from . import team_service
-from .team_logs import (
-    restricted_logs_callback,
-    restricted_logs_closed_by_callback,
-    restricted_logs_key_callback,
-    restricted_logs_responded_callback,
-    restricted_logs_search_callback,
-)
+from .team_logs import TeamLogCallbacks
 
 
 class Teams(commands.Cog):
@@ -597,12 +591,12 @@ async def setup(bot):
     old_logs_callbacks = {}
     if logs is not None:
         old_logs_callbacks[None] = logs.callback
-        logs.callback = restricted_logs_callback
+        logs.callback = TeamLogCallbacks.logs
         callbacks = {
-            "closed-by": restricted_logs_closed_by_callback,
-            "key": restricted_logs_key_callback,
-            "responded": restricted_logs_responded_callback,
-            "search": restricted_logs_search_callback,
+            "closed-by": TeamLogCallbacks.closed_by,
+            "key": TeamLogCallbacks.key,
+            "responded": TeamLogCallbacks.responded,
+            "search": TeamLogCallbacks.search,
         }
         for name, callback in callbacks.items():
             command = logs.get_command(name)
