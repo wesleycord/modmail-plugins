@@ -30,7 +30,7 @@ async def visible_logs(teams_cog, author, logs):
     return [log for log in logs if await can_view_log(teams_cog, author, log)]
 
 
-async def restricted_logs_callback(core_cog, ctx, *, user=None):
+async def restricted_logs_callback(core_cog, ctx, user=None):
     """Core's ``logs`` callback with team log-access filtering applied."""
     teams_cog = ctx.bot.get_cog("Teams")
     if teams_cog is None:
@@ -64,7 +64,7 @@ async def restricted_logs_callback(core_cog, ctx, *, user=None):
     await session.run()
 
 
-async def restricted_logs_closed_by_callback(core_cog, ctx, *, user=None):
+async def restricted_logs_closed_by_callback(core_cog, ctx, user=None):
     user = user if user is not None else ctx.author
     teams_cog = ctx.bot.get_cog("Teams")
     entries = await ctx.bot.api.search_closed_by(user.id)
@@ -102,7 +102,7 @@ async def restricted_logs_key_callback(core_cog, ctx, key):
     await session.run()
 
 
-async def restricted_logs_responded_callback(core_cog, ctx, *, user=None):
+async def restricted_logs_responded_callback(core_cog, ctx, user=None):
     user = user if user is not None else ctx.author
     teams_cog = ctx.bot.get_cog("Teams")
     entries = await ctx.bot.api.get_responded_logs(user.id)
