@@ -46,6 +46,20 @@ class ThreadMenu(commands.Cog):
                 return opt_key
         return None
 
+    def match_option(self, options, text):
+        """Find an option at the start of `text`, trying the longest word match first.
+
+        Returns a `(key, rest)` tuple, where `rest` is whatever followed the
+        matched option. This allows multi-word labels to be used without
+        quoting them, the same way Teams matches team names.
+        """
+        words = text.split()
+        for i in range(len(words), 0, -1):
+            key = self.find_option(options, " ".join(words[:i]))
+            if key:
+                return key, " ".join(words[i:])
+        return None, text
+
     def option_embed(self, key, option):
         embed = discord.Embed(
             title=f"Menu Option: {option['label']}", color=self.bot.main_color
@@ -370,21 +384,21 @@ class ThreadMenu(commands.Cog):
 
     @menu_option.command(name="emoji")
     @checks.has_permissions(PermissionLevel.ADMINISTRATOR)
-    async def menu_option_emoji(self, ctx, key_or_label: str, emoji: str = None):
+    async def menu_option_emoji(self, ctx, *, arguments: str):
         """Set (or clear) a menu option's emoji.
 
-        Identify the option by its `key` (see `{prefix}menu option list`) to
-        avoid needing to quote multi-word labels.
+        Example: `{prefix}menu option emoji Billing Issue 💳`
+        Leave the emoji out to clear it. Labels with spaces work without quoting.
         """
         options = self.get_options()
-        key = self.find_option(options, key_or_label)
+        key, emoji = self.match_option(options, arguments)
         if key is None:
             return await ctx.send(embed=discord.Embed(
                 color=self.bot.error_color,
-                description=f"No option matching `{key_or_label}` exists.",
+                description="No matching menu option found in that command.",
             ))
 
-        options[key]["emoji"] = emoji
+        options[key]["emoji"] = emoji or None
         await self.save_options(options)
         await ctx.send(embed=discord.Embed(
             color=self.bot.main_color,
@@ -393,22 +407,30 @@ class ThreadMenu(commands.Cog):
 
     @menu_option.command(name="category")
     @checks.has_permissions(PermissionLevel.ADMINISTRATOR)
-    async def menu_option_category(
-        self, ctx, key_or_label: str, *, category: discord.CategoryChannel = None
-    ):
+    async def menu_option_category(self, ctx, *, arguments: str):
         """Set (or clear) the category a menu option moves new threads into.
 
-        Identify the option by its `key` (see `{prefix}menu option list`) to
-        avoid needing to quote multi-word labels. Leave `category` empty to
-        clear it and fall back to the default category.
+        Example: `{prefix}menu option category Billing Issue #billing`
+        Leave the category out to clear it and fall back to the default
+        category. Labels with spaces work without quoting.
         """
         options = self.get_options()
-        key = self.find_option(options, key_or_label)
+        key, rest = self.match_option(options, arguments)
         if key is None:
             return await ctx.send(embed=discord.Embed(
                 color=self.bot.error_color,
-                description=f"No option matching `{key_or_label}` exists.",
+                description="No matching menu option found in that command.",
             ))
+
+        category = None
+        if rest:
+            try:
+                category = await commands.CategoryChannelConverter().convert(ctx, rest)
+            except commands.BadArgument:
+                return await ctx.send(embed=discord.Embed(
+                    color=self.bot.error_color,
+                    description=f"Could not find a category matching `{rest}`.",
+                ))
 
         options[key]["category_id"] = category.id if category else None
         await self.save_options(options)
@@ -423,23 +445,21 @@ class ThreadMenu(commands.Cog):
 
     @menu_option.command(name="command")
     @checks.has_permissions(PermissionLevel.ADMINISTRATOR)
-    async def menu_option_command(self, ctx, key_or_label: str, *, alias: str = None):
+    async def menu_option_command(self, ctx, *, arguments: str):
         """Set (or clear) a command to run instead of relaying the user's message.
 
-        Identify the option by its `key` (see `{prefix}menu option list`) to
-        avoid needing to quote multi-word labels. Leave `alias` empty to make
-        this option relay the message normally.
-
-        `alias` is resolved through discord.py's normal command pipeline
-        (not core's built-in menu, which can miss overridden commands), so
-        it works with any registered command, including plugin overrides.
+        Example: `{prefix}menu option command Billing Issue move Billing Team`
+        Leave the command out to make this option relay the message normally.
+        Labels with spaces work without quoting. `alias` is resolved through
+        discord.py's normal command pipeline, so it works with any registered
+        command, including plugin overrides.
         """
         options = self.get_options()
-        key = self.find_option(options, key_or_label)
+        key, alias = self.match_option(options, arguments)
         if key is None:
             return await ctx.send(embed=discord.Embed(
                 color=self.bot.error_color,
-                description=f"No option matching `{key_or_label}` exists.",
+                description="No matching menu option found in that command.",
             ))
 
         if alias:
@@ -460,21 +480,20 @@ class ThreadMenu(commands.Cog):
 
     @menu_option.command(name="team")
     @checks.has_permissions(PermissionLevel.ADMINISTRATOR)
-    async def menu_option_team(self, ctx, key_or_label: str, *, team_name: str = None):
-        """Link a menu option directly to a Teams plugin team. Leave `team_name` empty to unlink.
+    async def menu_option_team(self, ctx, *, arguments: str):
+        """Link a menu option directly to a Teams plugin team.
 
-        Identify the option by its `key` (see `{prefix}menu option list`) to
-        avoid needing to quote multi-word labels. This applies the team's
-        category, permissions, mentions, and note as soon as the thread is
-        ready. Equivalent to `{prefix}menu option command <key> move <team>`,
-        just without needing to spell out the move command yourself.
+        Example: `{prefix}menu option team Billing Issue Billing Team`
+        Leave the team out to unlink it. This applies the team's category,
+        permissions, mentions, and note as soon as the thread is ready.
+        Labels with spaces work without quoting.
         """
         options = self.get_options()
-        key = self.find_option(options, key_or_label)
+        key, team_name = self.match_option(options, arguments)
         if key is None:
             return await ctx.send(embed=discord.Embed(
                 color=self.bot.error_color,
-                description=f"No option matching `{key_or_label}` exists.",
+                description="No matching menu option found in that command.",
             ))
 
         if team_name:
@@ -500,8 +519,7 @@ class ThreadMenu(commands.Cog):
 
     @commands.Cog.listener()
     async def on_thread_ready(self, thread, creator, category, initial_message):
-        """Run a menu option's linked command through discord.py's normal
-        command-resolution pipeline (`bot.get_context`) instead of core's
+        """Run a menu option's linked command ourselves, bypassing core's
         manual Context construction, which can fail to resolve overridden
         commands. We use `"run_command"` (not `"command"`) as the stored
         type so core's own built-in invocation never fires for these too.
@@ -514,9 +532,33 @@ class ThreadMenu(commands.Cog):
         if alias:
             await self.run_menu_command(thread, alias, initial_message)
 
+    def resolve_command(self, alias):
+        """Find the deepest (sub)command matching the start of `alias`.
+
+        Tries the longest qualified name first, e.g. for `"team permission ..."`
+        this matches the `permission` subcommand of the `team` group rather
+        than just `team`. Returns a `(command, remaining_args)` tuple.
+        """
+        words = alias.split()
+        for i in range(len(words), 0, -1):
+            command = self.bot.get_command(" ".join(words[:i]))
+            if command is not None:
+                return command, " ".join(words[i:])
+        return None, alias
+
     async def run_menu_command(self, thread, alias, source_message):
         if source_message is None:
             return
+
+        command, remaining = self.resolve_command(alias)
+        if command is None:
+            await thread.channel.send(embed=discord.Embed(
+                color=self.bot.error_color,
+                description=f"Menu command `{alias}` doesn't match any registered command.",
+            ))
+            return
+
+        from discord.ext.commands.view import StringView
 
         from core.models import DummyMessage
 
@@ -524,20 +566,30 @@ class ThreadMenu(commands.Cog):
         synthetic.author = self.bot.modmail_guild.me or self.bot.user
         synthetic.channel = thread.channel
         synthetic.guild = thread.channel.guild
-        synthetic.content = self.bot.prefix + alias
+        synthetic.content = alias
 
-        ctx = await self.bot.get_context(synthetic)
-        if ctx.command is None:
-            return
-
+        ctx = commands.Context(
+            bot=self.bot,
+            view=StringView(remaining),
+            prefix=self.bot.prefix,
+            message=synthetic,
+        )
+        ctx.command = command
+        ctx.invoked_with = command.qualified_name
         ctx.thread = thread
 
-        old_checks = list(ctx.command.checks)
-        ctx.command.checks = []
+        old_checks = list(command.checks)
+        command.checks = []
         try:
-            await self.bot.invoke(ctx)
+            await command.invoke(ctx)
+        except commands.CommandError as exc:
+            await thread.channel.send(embed=discord.Embed(
+                color=self.bot.error_color,
+                description=f"Menu command `{alias}` failed: {exc}",
+            ))
         finally:
-            ctx.command.checks = old_checks
+            command.checks = old_checks
+
 
 
 async def setup(bot):
