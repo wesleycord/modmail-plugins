@@ -1,3 +1,5 @@
+"""Discord command definitions and plugin lifecycle wiring for Teams."""
+
 from typing import Union
 
 import discord
@@ -6,21 +8,30 @@ from discord.ext import commands
 from core import checks
 from core.models import PermissionLevel
 
+from . import team_helpers
+from . import team_service
+from .team_logs import (
+    restricted_logs_callback,
+    restricted_logs_closed_by_callback,
+    restricted_logs_key_callback,
+    restricted_logs_responded_callback,
+    restricted_logs_search_callback,
+)
+
 
 class Teams(commands.Cog):
     """Move threads to configurable teams instead of raw categories."""
 
-    def __init__(self, bot, old_move=None, old_contact=None):
+    def __init__(self, bot, old_move=None, old_contact=None, old_logs_callbacks=None):
         self.bot = bot
         self.coll = bot.plugin_db.get_partition(self)
         self.teams = {}
         self._old_move = old_move
         self._old_contact = old_contact
+        self._old_logs_callbacks = old_logs_callbacks or {}
 
     async def cog_load(self):
-        async for doc in self.coll.find():
-            doc.setdefault("sync_permissions", True)
-            self.teams[doc["_id"]] = doc
+        await team_service.load_teams(self)
 
     def cog_unload(self):
         self.bot.remove_command("move")
@@ -31,160 +42,12 @@ class Teams(commands.Cog):
         if self._old_contact is not None:
             self.bot.add_command(self._old_contact)
 
-    # ----- helpers -----------------------------------------------------
-
-    def find_team_exact(self, name):
-        return self.teams.get(name.strip().lower())
-
-    def find_team(self, name):
-        """Find a team by exact name, or by a unique name prefix."""
-        candidate = name.strip().lower()
-        if not candidate:
-            return None
-
-        team = self.teams.get(candidate)
-        if team:
-            return team
-
-        matches = [t for key, t in self.teams.items() if key.startswith(candidate)]
-        if len(matches) == 1:
-            return matches[0]
-        return None
-
-    def match_team(self, text):
-        """Find a team at the start of `text`, trying the longest word match first.
-
-        Returns a `(team, rest)` tuple, where `rest` is whatever followed the
-        matched team name. Team names may be given in full, or as a prefix
-        that uniquely identifies one team, and multi-word names don't need
-        to be quoted.
-        """
-        words = text.split()
-        for i in range(len(words), 0, -1):
-            team = self.find_team(" ".join(words[:i]))
-            if team:
-                return team, " ".join(words[i:])
-        return None, text
-
-    @staticmethod
-    async def convert_role_member_user(ctx, text):
-        for converter in (
-            commands.RoleConverter,
-            commands.MemberConverter,
-            commands.UserConverter,
-        ):
-            try:
-                return await converter().convert(ctx, text)
-            except commands.BadArgument:
-                continue
-        return None
-
-    @staticmethod
-    def permission_key(target):
-        kind = "role" if isinstance(target, discord.Role) else "user"
-        return f"{kind}:{target.id}"
-
-    @staticmethod
-    def resolve_permission_target(guild, key):
-        kind, sep, id_str = key.partition(":")
-        if not sep:
-            # legacy data stored plain role IDs
-            kind, id_str = "role", key
-        try:
-            target_id = int(id_str)
-        except ValueError:
-            return None
-        if kind == "role":
-            return guild.get_role(target_id)
-        return guild.get_member(target_id) or discord.Object(id=target_id)
-
-    async def save_team(self, team):
-        await self.coll.find_one_and_update(
-            {"_id": team["_id"]}, {"$set": team}, upsert=True
-        )
-        self.teams[team["_id"]] = team
-
-    async def save_thread_team(self, thread, team):
-        await self.bot.api.logs.update_one(
-            {"channel_id": str(thread.channel.id)},
-            {"$set": {"team": team["name"]}},
-        )
-
-    @staticmethod
-    def new_team(name):
-        return {
-            "_id": name.strip().lower(),
-            "name": name.strip(),
-            "category_id": None,
-            "permissions": {},
-            "pings": [],
-            "response": None,
-            "note": None,
-            "sync_permissions": True,
-        }
-
-    def team_embed(self, team):
-        embed = discord.Embed(
-            title=f"Team: {team['name']}", color=self.bot.main_color
-        )
-
-        category = (
-            self.bot.modmail_guild.get_channel(team["category_id"])
-            if team["category_id"]
-            else None
-        )
-        embed.add_field(
-            name="Category",
-            value=category.mention if category else "Not set",
-            inline=False,
-        )
-
-        if team["permissions"]:
-            lines = []
-            for key, perms in team["permissions"].items():
-                kind, sep, id_str = key.partition(":")
-                if not sep:
-                    kind, id_str = "role", key
-                if kind == "role":
-                    role = self.bot.modmail_guild.get_role(int(id_str))
-                    label = role.mention if role else f"`{id_str}`"
-                else:
-                    member = self.bot.modmail_guild.get_member(int(id_str))
-                    label = member.mention if member else f"<@{id_str}>"
-                perms_str = ", ".join(
-                    f"{'+' if v else '-'}{p}" for p, v in perms.items()
-                )
-                lines.append(f"{label}: {perms_str}")
-            embed.add_field(name="Permissions", value="\n".join(lines), inline=False)
-        else:
-            embed.add_field(name="Permissions", value="None set", inline=False)
-
-        embed.add_field(
-            name="Sync With Category",
-            value="Enabled" if team.get("sync_permissions", True) else "Disabled",
-            inline=False,
-        )
-
-        if team["pings"]:
-            mentions = []
-            for ping in team["pings"]:
-                if ping["type"] == "role":
-                    role = self.bot.modmail_guild.get_role(ping["id"])
-                    mentions.append(role.mention if role else f"`{ping['id']}`")
-                else:
-                    mentions.append(f"<@{ping['id']}>")
-            embed.add_field(name="Pings", value=" ".join(mentions), inline=False)
-        else:
-            embed.add_field(name="Pings", value="None set", inline=False)
-
-        embed.add_field(
-            name="User Response", value=team["response"] or "Not set", inline=False
-        )
-        embed.add_field(
-            name="Staff Note", value=team["note"] or "Not set", inline=False
-        )
-
-        return embed
+        logs = self.bot.get_command("logs")
+        if logs is not None:
+            for name, callback in self._old_logs_callbacks.items():
+                command = logs if name is None else logs.get_command(name)
+                if command is not None:
+                    command.callback = callback
 
     # ----- team management ----------------------------------------------
 
@@ -198,14 +61,14 @@ class Teams(commands.Cog):
     @checks.has_permissions(PermissionLevel.ADMINISTRATOR)
     async def team_create(self, ctx, *, name: str):
         """Create a new team."""
-        if self.find_team_exact(name):
+        if team_helpers.find_team_exact(self.teams, name):
             return await ctx.send(embed=discord.Embed(
                 color=self.bot.error_color,
                 description=f"A team named `{name}` already exists.",
             ))
 
-        team = self.new_team(name)
-        await self.save_team(team)
+        team = team_helpers.new_team(name)
+        await team_service.save_team(self, team)
         await ctx.send(embed=discord.Embed(
             color=self.bot.main_color,
             description=f"Created team `{team['name']}`.",
@@ -215,7 +78,7 @@ class Teams(commands.Cog):
     @checks.has_permissions(PermissionLevel.ADMINISTRATOR)
     async def team_delete(self, ctx, *, name: str):
         """Delete a team."""
-        team = self.find_team(name)
+        team = team_helpers.find_team(self.teams, name)
         if not team:
             return await ctx.send(embed=discord.Embed(
                 color=self.bot.error_color,
@@ -250,14 +113,14 @@ class Teams(commands.Cog):
     @checks.has_permissions(PermissionLevel.ADMINISTRATOR)
     async def team_info(self, ctx, *, name: str):
         """Show the configuration for a team."""
-        team = self.find_team(name)
+        team = team_helpers.find_team(self.teams, name)
         if not team:
             return await ctx.send(embed=discord.Embed(
                 color=self.bot.error_color,
                 description=f"No team named `{name}` exists.",
             ))
 
-        await ctx.send(embed=self.team_embed(team))
+        await ctx.send(embed=team_helpers.team_embed(self.bot, team))
 
     @team.command(name="category")
     @checks.has_permissions(PermissionLevel.ADMINISTRATOR)
@@ -267,7 +130,7 @@ class Teams(commands.Cog):
         Leave the category out to use the channel's current category.
         Example: `{prefix}team category Admin Team #admin-category`
         """
-        team, rest = self.match_team(arguments)
+        team, rest = team_helpers.match_team(self.teams, arguments)
         if not team:
             return await ctx.send(embed=discord.Embed(
                 color=self.bot.error_color,
@@ -291,7 +154,7 @@ class Teams(commands.Cog):
                 ))
 
         team["category_id"] = category.id
-        await self.save_team(team)
+        await team_service.save_team(self, team)
         await ctx.send(embed=discord.Embed(
             color=self.bot.main_color,
             description=f"Team `{team['name']}` will now move threads to {category.mention}.",
@@ -305,7 +168,7 @@ class Teams(commands.Cog):
         Example: `{prefix}team permission Admin Team @Admins allow view_channel send_messages`
         You may target a specific user instead of a role the same way.
         """
-        team, rest = self.match_team(arguments)
+        team, rest = team_helpers.match_team(self.teams, arguments)
         if not team:
             return await ctx.send(embed=discord.Embed(
                 color=self.bot.error_color,
@@ -320,7 +183,7 @@ class Teams(commands.Cog):
             ))
 
         target_text, action, *perms = parts
-        target = await self.convert_role_member_user(ctx, target_text)
+        target = await team_helpers.convert_role_member_user(ctx, target_text)
         if target is None:
             return await ctx.send(embed=discord.Embed(
                 color=self.bot.error_color,
@@ -334,11 +197,11 @@ class Teams(commands.Cog):
                 description="`action` must be `allow`, `deny`, or `reset`.",
             ))
 
-        target_key = self.permission_key(target)
+        target_key = team_helpers.permission_key(target)
 
         if action == "reset":
             team["permissions"].pop(target_key, None)
-            await self.save_team(team)
+            await team_service.save_team(self, team)
             return await ctx.send(embed=discord.Embed(
                 color=self.bot.main_color,
                 description=f"Reset permissions for {target.mention} on team `{team['name']}`.",
@@ -362,7 +225,7 @@ class Teams(commands.Cog):
         for perm in perms:
             target_perms[perm] = value
 
-        await self.save_team(team)
+        await team_service.save_team(self, team)
         await ctx.send(embed=discord.Embed(
             color=self.bot.main_color,
             description=(
@@ -370,6 +233,26 @@ class Teams(commands.Cog):
                 f"{', '.join(perms)} for {target.mention} on team `{team['name']}`."
             ),
         ))
+
+    @team.command(name="access")
+    @checks.has_permissions(PermissionLevel.ADMINISTRATOR)
+    async def team_access(self, ctx, *, arguments: str):
+        """Grant roles or users access to tickets assigned to a team.
+
+        Example: `{prefix}team access Admin Team add @Admins @Kewi`
+        Use the command without `add` or `remove` to view the configured access.
+        """
+        await team_service.update_access(self, ctx, arguments, "access", "Thread Access")
+
+    @team.command(name="log-access", aliases=["logs-access"])
+    @checks.has_permissions(PermissionLevel.ADMINISTRATOR)
+    async def team_log_access(self, ctx, *, arguments: str):
+        """Choose roles or users allowed to see this team's closed tickets in `.logs`.
+
+        Example: `{prefix}team log-access Admin Team add @Admins @Kewi`
+        An empty list leaves this team's logs visible to all existing `.logs` users.
+        """
+        await team_service.update_access(self, ctx, arguments, "log_access", "Log Access")
 
     @team.command(name="sync")
     @checks.has_permissions(PermissionLevel.ADMINISTRATOR)
@@ -379,7 +262,7 @@ class Teams(commands.Cog):
         Enabled by default, so the category's base permissions always apply
         unless turned off. Example: `{prefix}team sync Admin Team off`
         """
-        team, rest = self.match_team(arguments)
+        team, rest = team_helpers.match_team(self.teams, arguments)
         if not team:
             return await ctx.send(embed=discord.Embed(
                 color=self.bot.error_color,
@@ -394,7 +277,7 @@ class Teams(commands.Cog):
             ))
 
         team["sync_permissions"] = value == "on"
-        await self.save_team(team)
+        await team_service.save_team(self, team)
         await ctx.send(embed=discord.Embed(
             color=self.bot.main_color,
             description=(
@@ -410,7 +293,7 @@ class Teams(commands.Cog):
 
         Example: `{prefix}team mentions Admin Team add @Admins @Kewi 123456789012345678`
         """
-        team, rest = self.match_team(arguments)
+        team, rest = team_helpers.match_team(self.teams, arguments)
         if not team:
             return await ctx.send(embed=discord.Embed(
                 color=self.bot.error_color,
@@ -435,7 +318,7 @@ class Teams(commands.Cog):
         targets = []
         not_found = []
         for text in target_texts:
-            target = await self.convert_role_member_user(ctx, text)
+            target = await team_helpers.convert_role_member_user(ctx, text)
             if target is None:
                 not_found.append(text)
             else:
@@ -459,7 +342,7 @@ class Teams(commands.Cog):
                     p for p in team["pings"] if not (p["type"] == mention_type and p["id"] == target.id)
                 ]
 
-        await self.save_team(team)
+        await team_service.save_team(self, team)
 
         description = (
             f"{'Added' if action == 'add' else 'Removed'} "
@@ -479,7 +362,7 @@ class Teams(commands.Cog):
         Leave the message empty to clear it.
         Example: `{prefix}team response Admin Team You have been moved to the admin team.`
         """
-        team, message = self.match_team(arguments)
+        team, message = team_helpers.match_team(self.teams, arguments)
         if not team:
             return await ctx.send(embed=discord.Embed(
                 color=self.bot.error_color,
@@ -487,7 +370,7 @@ class Teams(commands.Cog):
             ))
 
         team["response"] = message or None
-        await self.save_team(team)
+        await team_service.save_team(self, team)
         await ctx.send(embed=discord.Embed(
             color=self.bot.main_color,
             description=f"Updated the user response for team `{team['name']}`.",
@@ -501,7 +384,7 @@ class Teams(commands.Cog):
         Leave the message empty to clear it.
         Example: `{prefix}team note Admin Team Escalate to an admin ASAP.`
         """
-        team, message = self.match_team(arguments)
+        team, message = team_helpers.match_team(self.teams, arguments)
         if not team:
             return await ctx.send(embed=discord.Embed(
                 color=self.bot.error_color,
@@ -509,94 +392,11 @@ class Teams(commands.Cog):
             ))
 
         team["note"] = message or None
-        await self.save_team(team)
+        await team_service.save_team(self, team)
         await ctx.send(embed=discord.Embed(
             color=self.bot.main_color,
             description=f"Updated the staff note for team `{team['name']}`.",
         ))
-
-    # ----- move override -------------------------------------------------
-
-    async def apply_permissions(self, thread, team, guild, reason):
-        """Apply a team's overwrites to its thread channel only.
-
-        When the channel was synced while moving, its existing overwrites are
-        the destination category's base. Updating the existing overwrite keeps
-        those values intact and never changes the category itself.
-        """
-        for key, perms in team["permissions"].items():
-            target = self.resolve_permission_target(guild, key)
-            if target is None:
-                continue
-            overwrite = thread.channel.overwrites_for(target)
-            for permission, value in perms.items():
-                setattr(overwrite, permission, value)
-            await thread.channel.set_permissions(
-                target, overwrite=overwrite, reason=reason
-            )
-
-    async def apply_team(self, thread, team, *, guild, reason):
-        """Apply `team`'s settings, optionally moving `thread`'s channel.
-
-        Returns an error message string on failure, or `None` on success.
-        Shared by the `move` command, `contact`, and the thread-creation menu
-        hook, so all three stay in sync with each other.
-        """
-        guild = guild or self.bot.modmail_guild
-        if guild is None:
-            return (
-                "This action cannot continue because the thread is not associated "
-                "with a guild. Please retry from a server channel."
-            )
-
-        if team["category_id"]:
-            category = guild.get_channel(team["category_id"])
-            if not isinstance(category, discord.CategoryChannel):
-                return (
-                    f"Team `{team['name']}` has an invalid category configured. "
-                    f"Use `{self.bot.prefix}team category` to update it."
-                )
-            await thread.channel.edit(
-                category=category,
-                sync_permissions=team.get("sync_permissions", True),
-                reason=reason,
-            )
-
-        # This changes the thread channel only. With syncing enabled above,
-        # category overwrites are already the channel's base permissions.
-        await self.apply_permissions(thread, team, guild, "Team permissions.")
-
-        if team["pings"]:
-            mentions = []
-            for ping in team["pings"]:
-                if ping["type"] == "role":
-                    role = guild.get_role(ping["id"])
-                    if role:
-                        mentions.append(role.mention)
-                else:
-                    mentions.append(f"<@{ping['id']}>")
-            if mentions:
-                await thread.channel.send(
-                    " ".join(mentions),
-                    allowed_mentions=discord.AllowedMentions(roles=True, users=True),
-                )
-
-        if team["note"]:
-            await thread.channel.send(embed=discord.Embed(
-                title="Staff Note",
-                description=team["note"],
-                color=self.bot.mod_color,
-            ))
-
-        if team["response"]:
-            await thread.recipient.send(embed=discord.Embed(
-                title=self.bot.config["thread_move_title"],
-                description=team["response"],
-                color=self.bot.main_color,
-            ))
-
-        await self.save_thread_team(thread, team)
-        return None
 
     @commands.Cog.listener()
     async def on_thread_ready(self, thread, creator, category, initial_message):
@@ -612,11 +412,12 @@ class Teams(commands.Cog):
         if not team_name:
             return
 
-        team = self.find_team(team_name)
+        team = team_helpers.find_team(self.teams, team_name)
         if not team:
             return
 
-        await self.apply_team(
+        await team_service.apply_team(
+            self,
             thread,
             team,
             guild=self.bot.modmail_guild,
@@ -632,7 +433,7 @@ class Teams(commands.Cog):
         `name` may be any team name set up with `{prefix}team create`, e.g.
         `{prefix}move uefn`, `{prefix}move admin team`, `{prefix}move senior mod team`.
         """
-        team = self.find_team(name)
+        team = team_helpers.find_team(self.teams, name)
         if not team:
             available = ", ".join(f"`{t['name']}`" for t in self.teams.values())
             return await ctx.send(embed=discord.Embed(
@@ -643,7 +444,8 @@ class Teams(commands.Cog):
                 ),
             ))
 
-        error = await self.apply_team(
+        error = await team_service.apply_team(
+            self,
             ctx.thread,
             team,
             guild=ctx.guild or self.bot.modmail_guild,
@@ -704,7 +506,7 @@ class Teams(commands.Cog):
         team = None
         category = None
         if team_name:
-            team = self.find_team(team_name)
+            team = team_helpers.find_team(self.teams, team_name)
             if not team:
                 return await ctx.send(embed=discord.Embed(
                     color=self.bot.error_color,
@@ -754,8 +556,11 @@ class Teams(commands.Cog):
 
         if team is not None:
             guild = ctx.guild or self.bot.modmail_guild
-            await self.apply_permissions(
-                thread, team, guild, "Team contact permissions."
+            await team_service.apply_permissions(
+                self, thread, team, guild, "Team contact permissions."
+            )
+            await team_service.apply_access(
+                self, thread, team, guild, "Team contact access."
             )
 
             if team["note"]:
@@ -765,7 +570,7 @@ class Teams(commands.Cog):
                     color=self.bot.mod_color,
                 ))
 
-            await self.save_thread_team(thread, team)
+            await team_service.save_thread_team(self, thread, team)
 
         embed = discord.Embed(
             title="Created Thread",
@@ -786,8 +591,23 @@ class Teams(commands.Cog):
 
 
 async def setup(bot):
-    # Remove the built-in move/contact commands first so our cog's own versions
-    # (added automatically when the cog is injected) don't collide with them.
     old_move = bot.remove_command("move")
     old_contact = bot.remove_command("contact")
-    await bot.add_cog(Teams(bot, old_move, old_contact))
+    logs = bot.get_command("logs")
+    old_logs_callbacks = {}
+    if logs is not None:
+        old_logs_callbacks[None] = logs.callback
+        logs.callback = restricted_logs_callback
+        callbacks = {
+            "closed-by": restricted_logs_closed_by_callback,
+            "key": restricted_logs_key_callback,
+            "responded": restricted_logs_responded_callback,
+            "search": restricted_logs_search_callback,
+        }
+        for name, callback in callbacks.items():
+            command = logs.get_command(name)
+            if command is not None:
+                old_logs_callbacks[name] = command.callback
+                command.callback = callback
+
+    await bot.add_cog(Teams(bot, old_move, old_contact, old_logs_callbacks))
