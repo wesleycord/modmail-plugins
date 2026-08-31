@@ -1,3 +1,5 @@
+from typing import Union
+
 import discord
 from discord.ext import commands
 
@@ -8,11 +10,12 @@ from core.models import PermissionLevel
 class Teams(commands.Cog):
     """Move threads to configurable teams instead of raw categories."""
 
-    def __init__(self, bot, old_move=None):
+    def __init__(self, bot, old_move=None, old_contact=None):
         self.bot = bot
         self.coll = bot.plugin_db.get_partition(self)
         self.teams = {}
         self._old_move = old_move
+        self._old_contact = old_contact
 
     async def cog_load(self):
         async for doc in self.coll.find():
@@ -23,6 +26,10 @@ class Teams(commands.Cog):
         self.bot.remove_command("move")
         if self._old_move is not None:
             self.bot.add_command(self._old_move)
+
+        self.bot.remove_command("contact")
+        if self._old_contact is not None:
+            self.bot.add_command(self._old_contact)
 
     # ----- helpers -----------------------------------------------------
 
@@ -590,9 +597,150 @@ class Teams(commands.Cog):
         sent_emoji, _ = await self.bot.retrieve_emoji()
         await self.bot.add_reaction(ctx.message, sent_emoji)
 
+    # ----- contact override ----------------------------------------------
+
+    @commands.command(usage="<user> [team]")
+    @checks.has_permissions(PermissionLevel.SUPPORTER)
+    async def contact(
+        self,
+        ctx,
+        user: Union[discord.Member, discord.User],
+        *,
+        team_name: str = None,
+    ):
+        """Create a thread with a specified member, optionally straight into a team.
+
+        `team_name` may be any team name set up with `{prefix}team create`.
+        Since this is staff-initiated, it always bypasses the thread-creation menu.
+        """
+        if user.bot:
+            return await ctx.send(embed=discord.Embed(
+                color=self.bot.error_color,
+                description=f"{user} is a bot, cannot add to thread.",
+            ))
+
+        if await self.bot.is_blocked(user):
+            return await ctx.send(embed=discord.Embed(
+                color=self.bot.error_color,
+                description=f"{user.mention} is currently blocked from contacting {self.bot.user.name}.",
+            ))
+
+        existing_thread = await self.bot.threads.find(recipient=user)
+        if existing_thread:
+            description = f"A thread for {user.mention} already exists"
+            if existing_thread.channel:
+                description += f" in {existing_thread.channel.mention}."
+            else:
+                description += "."
+            return await ctx.send(embed=discord.Embed(
+                color=self.bot.error_color, description=description,
+            ))
+
+        team = None
+        category = None
+        if team_name:
+            team = self.find_team(team_name)
+            if not team:
+                return await ctx.send(embed=discord.Embed(
+                    color=self.bot.error_color,
+                    description=f"No team matching `{team_name}` exists.",
+                ))
+
+            category = (
+                ctx.guild.get_channel(team["category_id"]) if team["category_id"] else None
+            )
+            if not isinstance(category, discord.CategoryChannel):
+                return await ctx.send(embed=discord.Embed(
+                    color=self.bot.error_color,
+                    description=(
+                        f"Team `{team['name']}` does not have a valid category set. "
+                        f"Use `{ctx.prefix}team category` to configure it."
+                    ),
+                ))
+
+        # creator != recipient, so ThreadManager.create's thread-creation-menu
+        # path (which only triggers for user-initiated DMs) is bypassed here.
+        thread = await self.bot.threads.create(
+            recipient=user,
+            creator=ctx.author,
+            category=category,
+            manual_trigger=True,
+        )
+
+        if thread.cancelled:
+            return
+
+        description = self.bot.formatter.format(
+            self.bot.config["thread_creation_contact_response"], creator=ctx.author
+        )
+        em = discord.Embed(
+            title=self.bot.config["thread_creation_contact_title"],
+            description=description,
+            color=self.bot.main_color,
+        )
+        if self.bot.config["show_timestamp"]:
+            em.timestamp = discord.utils.utcnow()
+        em.set_footer(
+            text=f"{ctx.author}",
+            icon_url=ctx.author.display_avatar.url if ctx.author.display_avatar else None,
+        )
+        await user.send(embed=em)
+
+        await thread.wait_until_ready()
+
+        if team is not None:
+            for key, perms in team["permissions"].items():
+                target = self.resolve_permission_target(ctx.guild, key)
+                if target is None:
+                    continue
+                overwrite = discord.PermissionOverwrite(**perms)
+                await thread.channel.set_permissions(
+                    target, overwrite=overwrite, reason="Team contact permissions."
+                )
+
+            if team["pings"]:
+                mentions = []
+                for ping in team["pings"]:
+                    if ping["type"] == "role":
+                        role = ctx.guild.get_role(ping["id"])
+                        if role:
+                            mentions.append(role.mention)
+                    else:
+                        mentions.append(f"<@{ping['id']}>")
+                if mentions:
+                    await thread.channel.send(
+                        " ".join(mentions),
+                        allowed_mentions=discord.AllowedMentions(roles=True, users=True),
+                    )
+
+            if team["note"]:
+                await thread.channel.send(embed=discord.Embed(
+                    title="Staff Note",
+                    description=team["note"],
+                    color=self.bot.mod_color,
+                ))
+
+        embed = discord.Embed(
+            title="Created Thread",
+            description=(
+                f"Thread started by {ctx.author.mention} for {user.mention}."
+                + (f" Assigned to team **{team['name']}**." if team else "")
+            ),
+            color=self.bot.main_color,
+        )
+        await thread.channel.send(embed=embed)
+
+        sent_emoji, _ = await self.bot.retrieve_emoji()
+        await self.bot.add_reaction(ctx.message, sent_emoji)
+        try:
+            await ctx.message.delete(delay=5)
+        except (discord.Forbidden, discord.NotFound):
+            pass
+
 
 async def setup(bot):
-    # Remove the built-in move command first so our cog's own "move" command
-    # (added automatically when the cog is injected) doesn't collide with it.
+    # Remove the built-in move/contact commands first so our cog's own versions
+    # (added automatically when the cog is injected) don't collide with them.
     old_move = bot.remove_command("move")
-    await bot.add_cog(Teams(bot, old_move))
+    old_contact = bot.remove_command("contact")
+    await bot.add_cog(Teams(bot, old_move, old_contact))
