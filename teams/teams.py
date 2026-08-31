@@ -16,6 +16,7 @@ class Teams(commands.Cog):
 
     async def cog_load(self):
         async for doc in self.coll.find():
+            doc.setdefault("sync_permissions", True)
             self.teams[doc["_id"]] = doc
 
     def cog_unload(self):
@@ -55,6 +56,25 @@ class Teams(commands.Cog):
                 continue
         return None
 
+    @staticmethod
+    def permission_key(target):
+        kind = "role" if isinstance(target, discord.Role) else "user"
+        return f"{kind}:{target.id}"
+
+    @staticmethod
+    def resolve_permission_target(guild, key):
+        kind, sep, id_str = key.partition(":")
+        if not sep:
+            # legacy data stored plain role IDs
+            kind, id_str = "role", key
+        try:
+            target_id = int(id_str)
+        except ValueError:
+            return None
+        if kind == "role":
+            return guild.get_role(target_id)
+        return guild.get_member(target_id) or discord.Object(id=target_id)
+
     async def save_team(self, team):
         await self.coll.find_one_and_update(
             {"_id": team["_id"]}, {"$set": team}, upsert=True
@@ -71,6 +91,7 @@ class Teams(commands.Cog):
             "pings": [],
             "response": None,
             "note": None,
+            "sync_permissions": True,
         }
 
     def team_embed(self, team):
@@ -91,16 +112,29 @@ class Teams(commands.Cog):
 
         if team["permissions"]:
             lines = []
-            for role_id, perms in team["permissions"].items():
-                role = self.bot.modmail_guild.get_role(int(role_id))
-                role_name = role.mention if role else f"`{role_id}`"
+            for key, perms in team["permissions"].items():
+                kind, sep, id_str = key.partition(":")
+                if not sep:
+                    kind, id_str = "role", key
+                if kind == "role":
+                    role = self.bot.modmail_guild.get_role(int(id_str))
+                    label = role.mention if role else f"`{id_str}`"
+                else:
+                    member = self.bot.modmail_guild.get_member(int(id_str))
+                    label = member.mention if member else f"<@{id_str}>"
                 perms_str = ", ".join(
                     f"{'+' if v else '-'}{p}" for p, v in perms.items()
                 )
-                lines.append(f"{role_name}: {perms_str}")
+                lines.append(f"{label}: {perms_str}")
             embed.add_field(name="Permissions", value="\n".join(lines), inline=False)
         else:
             embed.add_field(name="Permissions", value="None set", inline=False)
+
+        embed.add_field(
+            name="Sync With Category",
+            value="Enabled" if team.get("sync_permissions", True) else "Disabled",
+            inline=False,
+        )
 
         if team["pings"]:
             mentions = []
@@ -234,9 +268,10 @@ class Teams(commands.Cog):
     @team.command(name="permission", aliases=["perm", "permissions", "perms"])
     @checks.has_permissions(PermissionLevel.ADMINISTRATOR)
     async def team_permission(self, ctx, *, arguments: str):
-        """Set channel permission overwrites for a role for this team.
+        """Set channel permission overwrites for a role or user for this team.
 
         Example: `{prefix}team permission Admin Team @Admins allow view_channel send_messages`
+        You may target a specific user instead of a role the same way.
         """
         team, rest = self.match_team(arguments)
         if not team:
@@ -249,16 +284,15 @@ class Teams(commands.Cog):
         if len(parts) < 2:
             return await ctx.send(embed=discord.Embed(
                 color=self.bot.error_color,
-                description="Provide a role and an action (`allow`, `deny`, or `reset`).",
+                description="Provide a role/user and an action (`allow`, `deny`, or `reset`).",
             ))
 
-        role_text, action, *perms = parts
-        try:
-            role = await commands.RoleConverter().convert(ctx, role_text)
-        except commands.BadArgument:
+        target_text, action, *perms = parts
+        target = await self.convert_role_member_user(ctx, target_text)
+        if target is None:
             return await ctx.send(embed=discord.Embed(
                 color=self.bot.error_color,
-                description=f"Could not find a role matching `{role_text}`.",
+                description=f"Could not find a role or user matching `{target_text}`.",
             ))
 
         action = action.lower()
@@ -268,14 +302,14 @@ class Teams(commands.Cog):
                 description="`action` must be `allow`, `deny`, or `reset`.",
             ))
 
-        role_key = str(role.id)
+        target_key = self.permission_key(target)
 
         if action == "reset":
-            team["permissions"].pop(role_key, None)
+            team["permissions"].pop(target_key, None)
             await self.save_team(team)
             return await ctx.send(embed=discord.Embed(
                 color=self.bot.main_color,
-                description=f"Reset permissions for {role.mention} on team `{team['name']}`.",
+                description=f"Reset permissions for {target.mention} on team `{team['name']}`.",
             ))
 
         if not perms:
@@ -292,16 +326,48 @@ class Teams(commands.Cog):
             ))
 
         value = action == "allow"
-        role_perms = team["permissions"].setdefault(role_key, {})
+        target_perms = team["permissions"].setdefault(target_key, {})
         for perm in perms:
-            role_perms[perm] = value
+            target_perms[perm] = value
 
         await self.save_team(team)
         await ctx.send(embed=discord.Embed(
             color=self.bot.main_color,
             description=(
                 f"{'Allowed' if value else 'Denied'} "
-                f"{', '.join(perms)} for {role.mention} on team `{team['name']}`."
+                f"{', '.join(perms)} for {target.mention} on team `{team['name']}`."
+            ),
+        ))
+
+    @team.command(name="sync")
+    @checks.has_permissions(PermissionLevel.ADMINISTRATOR)
+    async def team_sync(self, ctx, *, arguments: str):
+        """Toggle syncing the channel's permissions with the destination category on move.
+
+        Enabled by default, so the category's base permissions always apply
+        unless turned off. Example: `{prefix}team sync Admin Team off`
+        """
+        team, rest = self.match_team(arguments)
+        if not team:
+            return await ctx.send(embed=discord.Embed(
+                color=self.bot.error_color,
+                description="No matching team found in that command.",
+            ))
+
+        value = rest.strip().lower()
+        if value not in ("on", "off"):
+            return await ctx.send(embed=discord.Embed(
+                color=self.bot.error_color,
+                description="Provide `on` or `off`.",
+            ))
+
+        team["sync_permissions"] = value == "on"
+        await self.save_team(team)
+        await ctx.send(embed=discord.Embed(
+            color=self.bot.main_color,
+            description=(
+                f"Category permission syncing is now "
+                f"{'enabled' if team['sync_permissions'] else 'disabled'} for team `{team['name']}`."
             ),
         ))
 
@@ -455,16 +521,17 @@ class Teams(commands.Cog):
 
         await thread.channel.edit(
             category=category,
+            sync_permissions=team.get("sync_permissions", True),
             reason=f"{ctx.author} moved this thread to team {team['name']}.",
         )
 
-        for role_id, perms in team["permissions"].items():
-            role = ctx.guild.get_role(int(role_id))
-            if role is None:
+        for key, perms in team["permissions"].items():
+            target = self.resolve_permission_target(ctx.guild, key)
+            if target is None:
                 continue
             overwrite = discord.PermissionOverwrite(**perms)
             await thread.channel.set_permissions(
-                role, overwrite=overwrite, reason="Team move permissions."
+                target, overwrite=overwrite, reason="Team move permissions."
             )
 
         if team["pings"]:
