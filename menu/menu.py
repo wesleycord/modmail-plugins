@@ -22,19 +22,21 @@ class ThreadMenu(commands.Cog):
 
     def __init__(self, bot):
         self.bot = bot
-        # Patch the bot's get_context method to fix guild=None in menu commands
-        self._original_get_context = bot.get_context
-        bot.get_context = self._patched_get_context
+        # Add a before-invoke hook to fix guild=None contexts
+        if not hasattr(bot, '_menu_before_invoke_added'):
+            bot.before_invoke = self._fix_guild_before_invoke
+            bot._menu_before_invoke_added = True
+            print(f"[MENU DEBUG] Added before_invoke hook to bot")
 
-    async def _patched_get_context(self, message, *, cls=None):
-        """Get context and fix guild=None for menu commands."""
-        ctx = await self._original_get_context(message, cls=cls)
-        if ctx.guild is None and message.guild is None:
-            # This is likely a menu command from core with no guild
-            # Set it to the modmail guild
+    async def _fix_guild_before_invoke(self, ctx):
+        """Fix guild=None in contexts before command invocation."""
+        if ctx.guild is None:
+            print(f"[MENU DEBUG] before_invoke: ctx.guild is None, fixing to {self.bot.modmail_guild}")
             ctx.guild = self.bot.modmail_guild
-            print(f"[MENU DEBUG] Fixed ctx.guild from None to {ctx.guild}")
-        return ctx
+            if ctx.message:
+                ctx.message.guild = self.bot.modmail_guild
+        else:
+            print(f"[MENU DEBUG] before_invoke: ctx.guild is {ctx.guild}")
 
     # ----- helpers -----------------------------------------------------
 
