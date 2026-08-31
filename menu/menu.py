@@ -524,12 +524,17 @@ class ThreadMenu(commands.Cog):
         commands. We use `"run_command"` (not `"command"`) as the stored
         type so core's own built-in invocation never fires for these too.
         """
+        print(f"[MENU DEBUG] on_thread_ready called")
         option = getattr(thread, "_selected_thread_creation_menu_option", None)
+        print(f"[MENU DEBUG] option = {option}")
         if not isinstance(option, dict) or option.get("type") != "run_command":
+            print(f"[MENU DEBUG] option is not a run_command type, returning")
             return
 
         alias = option.get("callback")
+        print(f"[MENU DEBUG] alias = {alias}")
         if alias:
+            print(f"[MENU DEBUG] calling run_menu_command with alias: {alias}")
             await self.run_menu_command(thread, alias, initial_message)
 
     def resolve_command(self, alias):
@@ -539,35 +544,47 @@ class ThreadMenu(commands.Cog):
         this matches the `permission` subcommand of the `team` group rather
         than just `team`. Returns a `(command, remaining_args)` tuple.
         """
+        print(f"[MENU DEBUG] resolve_command called with alias: {alias}")
         words = alias.split()
         for i in range(len(words), 0, -1):
-            command = self.bot.get_command(" ".join(words[:i]))
+            command_name = " ".join(words[:i])
+            command = self.bot.get_command(command_name)
+            print(f"[MENU DEBUG] trying to resolve '{command_name}' -> {command}")
             if command is not None:
-                return command, " ".join(words[i:])
+                remaining = " ".join(words[i:])
+                print(f"[MENU DEBUG] found command: {command}, remaining: {remaining}")
+                return command, remaining
+        print(f"[MENU DEBUG] no command found for alias: {alias}")
         return None, alias
 
     async def run_menu_command(self, thread, alias, source_message):
+        print(f"[MENU DEBUG] run_menu_command called with alias: {alias}")
         if source_message is None:
+            print(f"[MENU DEBUG] source_message is None, returning")
             return
 
         command, remaining = self.resolve_command(alias)
         if command is None:
+            print(f"[MENU DEBUG] command is None, sending error message")
             await thread.channel.send(embed=discord.Embed(
                 color=self.bot.error_color,
                 description=f"Menu command `{alias}` doesn't match any registered command.",
             ))
             return
 
+        print(f"[MENU DEBUG] resolved command: {command}, remaining: {remaining}")
         from discord.ext.commands.view import StringView
 
         from core.models import DummyMessage
 
         try:
+            print(f"[MENU DEBUG] creating synthetic message and context")
             synthetic = DummyMessage(copy.copy(source_message))
             synthetic.author = self.bot.modmail_guild.me or self.bot.user
             synthetic.channel = thread.channel
             synthetic.guild = thread.channel.guild
             synthetic.content = alias
+            print(f"[MENU DEBUG] synthetic message created")
 
             ctx = commands.Context(
                 bot=self.bot,
@@ -578,11 +595,14 @@ class ThreadMenu(commands.Cog):
             ctx.command = command
             ctx.invoked_with = command.qualified_name
             ctx.thread = thread
+            print(f"[MENU DEBUG] context created, invoking command: {command.qualified_name}")
 
             # Invoke command directly without temporarily clearing checks.
             # This avoids threading issues and properly respects all decorators.
             await command.invoke(ctx)
+            print(f"[MENU DEBUG] command invoked successfully")
         except Exception as exc:
+            print(f"[MENU DEBUG] exception caught: {type(exc).__name__}: {exc}")
             error_msg = str(exc) if str(exc) else type(exc).__name__
             await thread.channel.send(embed=discord.Embed(
                 color=self.bot.error_color,
