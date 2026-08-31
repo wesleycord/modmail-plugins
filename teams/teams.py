@@ -525,10 +525,6 @@ class Teams(commands.Cog):
                     f"Team `{team['name']}` has an invalid category configured. "
                     f"Use `{self.bot.prefix}team category` to update it."
                 )
-        else if thread.channel.category is not None:
-            category = thread.channel.category
-
-        if category:
             await thread.channel.edit(
                 category=category,
                 sync_permissions=team.get("sync_permissions", True),
