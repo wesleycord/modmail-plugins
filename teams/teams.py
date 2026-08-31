@@ -9,6 +9,7 @@ from core import checks
 from core.models import PermissionLevel
 
 from . import team_helpers
+from . import team_logs
 from . import team_service
 
 
@@ -21,11 +22,19 @@ class Teams(commands.Cog):
         self.teams = {}
         self._old_move = old_move
         self._old_contact = old_contact
+        self._log_command_originals = None
 
     async def cog_load(self):
         await team_service.load_teams(self)
+        team_service.install_log_channel_override(self)
+        team_service.install_database_logging_override(self)
+        team_logs.install(self)
 
     def cog_unload(self):
+        team_logs.uninstall(self)
+        team_service.uninstall_database_logging_override(self)
+        team_service.uninstall_log_channel_override(self)
+
         self.bot.remove_command("move")
         if self._old_move is not None:
             self.bot.add_command(self._old_move)
@@ -244,15 +253,108 @@ class Teams(commands.Cog):
         """
         await team_service.update_access(self, ctx, arguments, "access", "Thread Access")
 
-    @team.command(name="log-access", aliases=["logs-access"])
+    @team.group(name="logs", invoke_without_command=True)
     @checks.has_permissions(PermissionLevel.ADMINISTRATOR)
-    async def team_log_access(self, ctx, *, arguments: str):
+    async def team_logs(self, ctx):
+        """Configure how a team's tickets are logged: `channel`, `access`, or `status`."""
+        await ctx.send_help(ctx.command)
+
+    @team_logs.command(name="channel")
+    @checks.has_permissions(PermissionLevel.ADMINISTRATOR)
+    async def team_logs_channel(self, ctx, *, arguments: str):
+        """Set the channel this team's closed-thread log summary is posted to.
+
+        Provide `none` or `default` to clear the override and use the default
+        log channel. Leave the channel out entirely to view the current setting.
+        Example: `{prefix}team logs channel Admin Team #admin-logs`
+        """
+        team, rest = team_helpers.match_team(self.teams, arguments)
+        if not team:
+            return await ctx.send(embed=discord.Embed(
+                color=self.bot.error_color,
+                description="No matching team found in that command.",
+            ))
+
+        if not rest:
+            guild = ctx.guild or self.bot.modmail_guild
+            channel = guild.get_channel(team["log_channel_id"]) if team.get("log_channel_id") else None
+            return await ctx.send(embed=discord.Embed(
+                color=self.bot.main_color,
+                title=f"Log Channel: {team['name']}",
+                description=channel.mention if channel else "Default",
+            ))
+
+        if rest.strip().lower() in ("none", "default"):
+            team["log_channel_id"] = None
+            await team_service.save_team(self, team)
+            return await ctx.send(embed=discord.Embed(
+                color=self.bot.main_color,
+                description=f"Team `{team['name']}` will now use the default log channel.",
+            ))
+
+        try:
+            channel = await commands.TextChannelConverter().convert(ctx, rest)
+        except commands.BadArgument:
+            return await ctx.send(embed=discord.Embed(
+                color=self.bot.error_color,
+                description=f"Could not find a channel matching `{rest}`.",
+            ))
+
+        team["log_channel_id"] = channel.id
+        await team_service.save_team(self, team)
+        await ctx.send(embed=discord.Embed(
+            color=self.bot.main_color,
+            description=f"Team `{team['name']}` logs will now be posted to {channel.mention}.",
+        ))
+
+    @team_logs.command(name="access")
+    @checks.has_permissions(PermissionLevel.ADMINISTRATOR)
+    async def team_logs_access(self, ctx, *, arguments: str):
         """Choose roles or users allowed to see this team's closed tickets in `.logs`.
 
-        Example: `{prefix}team log-access Admin Team add @Admins @Kewi`
+        Example: `{prefix}team logs access Admin Team add @Admins @Kewi`
         An empty list leaves this team's logs visible to all existing `.logs` users.
         """
         await team_service.update_access(self, ctx, arguments, "log_access", "Log Access")
+
+    @team_logs.command(name="status")
+    @checks.has_permissions(PermissionLevel.ADMINISTRATOR)
+    async def team_logs_status(self, ctx, *, arguments: str):
+        """Enable or disable saving this team's ticket messages to the database.
+
+        Leave `on`/`off` out to view the current setting.
+        Example: `{prefix}team logs status Admin Team off`
+        """
+        team, rest = team_helpers.match_team(self.teams, arguments)
+        if not team:
+            return await ctx.send(embed=discord.Embed(
+                color=self.bot.error_color,
+                description="No matching team found in that command.",
+            ))
+
+        value = rest.strip().lower()
+        if not value:
+            return await ctx.send(embed=discord.Embed(
+                color=self.bot.main_color,
+                title=f"Log Status: {team['name']}",
+                description="Enabled" if team.get("log_status", True) else "Disabled",
+            ))
+
+        if value not in ("on", "off"):
+            return await ctx.send(embed=discord.Embed(
+                color=self.bot.error_color,
+                description="Provide `on` or `off`.",
+            ))
+
+        team["log_status"] = value == "on"
+        await team_service.save_team(self, team)
+        await ctx.send(embed=discord.Embed(
+            color=self.bot.main_color,
+            description=(
+                f"Database logging is now "
+                f"{'enabled' if team['log_status'] else 'disabled'} for team `{team['name']}`."
+            ),
+        ))
 
     @team.command(name="sync")
     @checks.has_permissions(PermissionLevel.ADMINISTRATOR)

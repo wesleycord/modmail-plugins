@@ -1,6 +1,7 @@
 """Database updates and Discord ticket changes performed by Teams commands."""
 
 import discord
+from core import thread as core_thread
 
 from . import team_helpers
 
@@ -10,6 +11,8 @@ async def load_teams(cog):
         team.setdefault("sync_permissions", True)
         team.setdefault("access", [])
         team.setdefault("log_access", [])
+        team.setdefault("log_channel_id", None)
+        team.setdefault("log_status", True)
         cog.teams[team["_id"]] = team
 
 
@@ -25,6 +28,149 @@ async def save_thread_team(cog, thread, team):
         {"channel_id": str(thread.channel.id)},
         {"$set": {"team": team["name"]}},
     )
+    _channel_team_cache[thread.channel.id] = team
+
+
+# ----- per-team log channel redirection -------------------------------
+#
+# Core posts the closed-thread transcript embed to ``bot.log_channel``, a
+# property with no knowledge of which team (if any) a thread belongs to. To
+# redirect that single post per team, we wrap ``Thread._close`` to stash the
+# team's configured channel id on the bot for the duration of the close, and
+# patch the ``log_channel`` property to prefer that override when present.
+
+_original_thread_close = None
+_original_log_channel_property = None
+
+# Shared cache of channel id -> team dict (or None), used by both the log
+# channel redirection above and the database logging gate below. Team dicts
+# are the same objects stored in ``cog.teams``, so in-place edits (e.g. from
+# `team logs status`) are reflected immediately without invalidating this.
+_channel_team_cache = {}
+
+
+def install_log_channel_override(cog):
+    global _original_thread_close, _original_log_channel_property
+
+    if _original_thread_close is None:
+        _original_thread_close = core_thread.Thread._close
+
+        async def patched_close(self, *args, **kwargs):
+            channel_id = self.channel.id if self.channel else None
+            self.bot._team_log_channel_override = await _team_log_channel_id(cog, self)
+            try:
+                await _original_thread_close(self, *args, **kwargs)
+            finally:
+                self.bot._team_log_channel_override = None
+                if channel_id is not None:
+                    _channel_team_cache.pop(channel_id, None)
+
+        core_thread.Thread._close = patched_close
+
+    bot_cls = type(cog.bot)
+    if _original_log_channel_property is None:
+        _original_log_channel_property = bot_cls.log_channel
+
+        def patched_log_channel(bot_self):
+            channel_id = getattr(bot_self, "_team_log_channel_override", None)
+            if channel_id:
+                channel = bot_self.get_channel(channel_id)
+                if channel is not None:
+                    return channel
+            return _original_log_channel_property.fget(bot_self)
+
+        bot_cls.log_channel = property(patched_log_channel)
+
+
+def uninstall_log_channel_override(cog):
+    global _original_thread_close, _original_log_channel_property
+
+    if _original_thread_close is not None:
+        core_thread.Thread._close = _original_thread_close
+        _original_thread_close = None
+
+    if _original_log_channel_property is not None:
+        type(cog.bot).log_channel = _original_log_channel_property
+        _original_log_channel_property = None
+
+
+async def _resolve_team_for_channel(cog, channel_id):
+    """Look up (and cache) the team assigned to a thread's channel, if any."""
+    if channel_id in _channel_team_cache:
+        return _channel_team_cache[channel_id]
+
+    team = None
+    try:
+        log_entry = await cog.bot.api.get_log(channel_id)
+    except Exception:
+        log_entry = None
+    team_name = log_entry.get("team") if log_entry else None
+    if team_name:
+        team = team_helpers.find_team_exact(cog.teams, team_name)
+
+    _channel_team_cache[channel_id] = team
+    return team
+
+
+async def _team_log_channel_id(cog, thread):
+    """Resolve the configured log channel id for the team assigned to ``thread``, if any."""
+    if thread.channel is None:
+        return None
+    team = await _resolve_team_for_channel(cog, thread.channel.id)
+    return team.get("log_channel_id") if team else None
+
+
+# ----- per-team database logging status -------------------------------
+#
+# When a team's `log_status` is disabled, new ticket messages and the
+# closing summary are not persisted to the database for threads assigned to
+# that team. The log entry created when the thread is first opened (before
+# any team is assigned) is left untouched.
+
+_original_append_log = None
+_original_post_log = None
+
+
+def install_database_logging_override(cog):
+    global _original_append_log, _original_post_log
+    api_cls = type(cog.bot.api)
+
+    if _original_append_log is None:
+        _original_append_log = api_cls.append_log
+
+        async def patched_append_log(self, message, **kwargs):
+            channel_id = kwargs.get("channel_id")
+            if channel_id is not None:
+                team = await _resolve_team_for_channel(cog, int(channel_id))
+                if team is not None and not team.get("log_status", True):
+                    return None
+            return await _original_append_log(self, message, **kwargs)
+
+        api_cls.append_log = patched_append_log
+
+    if _original_post_log is None:
+        _original_post_log = api_cls.post_log
+
+        async def patched_post_log(self, channel_id, data):
+            team = await _resolve_team_for_channel(cog, int(channel_id))
+            if team is not None and not team.get("log_status", True):
+                return None
+            return await _original_post_log(self, channel_id, data)
+
+        api_cls.post_log = patched_post_log
+
+
+def uninstall_database_logging_override(cog):
+    global _original_append_log, _original_post_log
+    api_cls = type(cog.bot.api)
+
+    if _original_append_log is not None:
+        api_cls.append_log = _original_append_log
+        _original_append_log = None
+
+    if _original_post_log is not None:
+        api_cls.post_log = _original_post_log
+        _original_post_log = None
 
 
 async def update_access(cog, ctx, arguments, field, label):

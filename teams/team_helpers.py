@@ -80,6 +80,8 @@ def new_team(name):
         "response": None,
         "note": None,
         "sync_permissions": True,
+        "log_channel_id": None,
+        "log_status": True,
     }
 
 
@@ -100,6 +102,18 @@ def team_embed(bot, team):
     category = guild.get_channel(team["category_id"]) if team["category_id"] else None
     embed.add_field(
         name="Category", value=category.mention if category else "Not set", inline=False
+    )
+
+    log_channel = guild.get_channel(team["log_channel_id"]) if team.get("log_channel_id") else None
+    embed.add_field(
+        name="Log Channel",
+        value=log_channel.mention if log_channel else "Default",
+        inline=False,
+    )
+    embed.add_field(
+        name="Log Status",
+        value="Enabled" if team.get("log_status", True) else "Disabled",
+        inline=False,
     )
 
     if team["permissions"]:
