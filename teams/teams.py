@@ -104,6 +104,12 @@ class Teams(commands.Cog):
         )
         self.teams[team["_id"]] = team
 
+    async def save_thread_team(self, thread, team):
+        await self.bot.api.logs.update_one(
+            {"channel_id": str(thread.channel.id)},
+            {"$set": {"team": team["name"]}},
+        )
+
     @staticmethod
     def new_team(name):
         return {
@@ -511,6 +517,16 @@ class Teams(commands.Cog):
 
     # ----- move override -------------------------------------------------
 
+    async def apply_permissions(self, thread, team, guild, reason):
+        for key, perms in team["permissions"].items():
+            target = self.resolve_permission_target(guild, key)
+            if target is None:
+                continue
+            overwrite = discord.PermissionOverwrite(**perms)
+            await thread.channel.set_permissions(
+                target, overwrite=overwrite, reason=reason
+            )
+
     async def apply_team(self, thread, team, *, guild, reason):
         """Apply `team`'s settings, optionally moving `thread`'s channel.
 
@@ -538,14 +554,7 @@ class Teams(commands.Cog):
                 reason=reason,
             )
 
-        for key, perms in team["permissions"].items():
-            target = self.resolve_permission_target(guild, key)
-            if target is None:
-                continue
-            overwrite = discord.PermissionOverwrite(**perms)
-            await thread.channel.set_permissions(
-                target, overwrite=overwrite, reason="Team permissions."
-            )
+        await self.apply_permissions(thread, team, guild, "Team permissions.")
 
         if team["pings"]:
             mentions = []
@@ -576,6 +585,7 @@ class Teams(commands.Cog):
                 color=self.bot.main_color,
             ))
 
+        await self.save_thread_team(thread, team)
         return None
 
     @commands.Cog.listener()
@@ -734,14 +744,9 @@ class Teams(commands.Cog):
 
         if team is not None:
             guild = ctx.guild or self.bot.modmail_guild
-            for key, perms in team["permissions"].items():
-                target = self.resolve_permission_target(guild, key)
-                if target is None:
-                    continue
-                overwrite = discord.PermissionOverwrite(**perms)
-                await thread.channel.set_permissions(
-                    target, overwrite=overwrite, reason="Team contact permissions."
-                )
+            await self.apply_permissions(
+                thread, team, guild, "Team contact permissions."
+            )
 
             if team["note"]:
                 await thread.channel.send(embed=discord.Embed(
@@ -749,6 +754,8 @@ class Teams(commands.Cog):
                     description=team["note"],
                     color=self.bot.mod_color,
                 ))
+
+            await self.save_thread_team(thread, team)
 
         embed = discord.Embed(
             title="Created Thread",
