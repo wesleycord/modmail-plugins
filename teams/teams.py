@@ -512,24 +512,28 @@ class Teams(commands.Cog):
     # ----- move override -------------------------------------------------
 
     async def apply_team(self, thread, team, *, guild, reason):
-        """Move `thread`'s channel into `team`'s category and apply its settings.
+        """Apply `team`'s settings, optionally moving `thread`'s channel.
 
         Returns an error message string on failure, or `None` on success.
         Shared by the `move` command, `contact`, and the thread-creation menu
         hook, so all three stay in sync with each other.
         """
-        category = guild.get_channel(team["category_id"]) if team["category_id"] else None
-        if not isinstance(category, discord.CategoryChannel):
-            return (
-                f"Team `{team['name']}` does not have a valid category set. "
-                f"Use `{self.bot.prefix}team category` to configure it."
-            )
+        if team["category_id"]:
+            category = guild.get_channel(team["category_id"])
+            if not isinstance(category, discord.CategoryChannel):
+                return (
+                    f"Team `{team['name']}` has an invalid category configured. "
+                    f"Use `{self.bot.prefix}team category` to update it."
+                )
+        else if thread.channel.category is not None:
+            category = thread.channel.category
 
-        await thread.channel.edit(
-            category=category,
-            sync_permissions=team.get("sync_permissions", True),
-            reason=reason,
-        )
+        if category:
+            await thread.channel.edit(
+                category=category,
+                sync_permissions=team.get("sync_permissions", True),
+                reason=reason,
+            )
 
         for key, perms in team["permissions"].items():
             target = self.resolve_permission_target(guild, key)
@@ -684,15 +688,13 @@ class Teams(commands.Cog):
                     description=f"No team matching `{team_name}` exists.",
                 ))
 
-            category = (
-                ctx.guild.get_channel(team["category_id"]) if team["category_id"] else None
-            )
-            if not isinstance(category, discord.CategoryChannel):
+            category = ctx.guild.get_channel(team["category_id"]) if team["category_id"] else None
+            if team["category_id"] and not isinstance(category, discord.CategoryChannel):
                 return await ctx.send(embed=discord.Embed(
                     color=self.bot.error_color,
                     description=(
-                        f"Team `{team['name']}` does not have a valid category set. "
-                        f"Use `{ctx.prefix}team category` to configure it."
+                        f"Team `{team['name']}` has an invalid category configured. "
+                        f"Use `{ctx.prefix}team category` to update it."
                     ),
                 ))
 
