@@ -8,35 +8,30 @@ from core.models import PermissionLevel
 
 
 class ThreadMenu(commands.Cog):
-    """Friendly commands for managing Modmail's built-in DM thread-creation menu.
+    """Manage Modmail's built-in DM thread-creation menu configuration.
 
-    This doesn't reimplement the menu itself - it manages the same
-    `thread_creation_menu_*` config keys that Modmail's core already reads
-    when a new thread is set up, just with commands instead of raw config
-    editing. Submenus aren't supported here, only flat options.
+    This cog provides administrator commands for the
+    `thread_creation_menu_*` configuration values used by Modmail core. It
+    supports only flat options, and can run a configured command or apply a
+    Teams plugin team after a thread created from a menu selection is ready.
 
-    Core only ever shows this menu for user-initiated DMs (it's skipped
-    whenever a staff member starts the thread, e.g. via the contact command),
-    so this plugin doesn't need to touch contact at all.
+    The menu presentation and thread creation remain the responsibility of
+    Modmail core; this cog only manages its configuration and post-creation
+    option actions.
     """
 
     def __init__(self, bot):
         self.bot = bot
-        # Add a before-invoke hook to fix guild=None contexts
         if not hasattr(bot, '_menu_before_invoke_added'):
             bot.before_invoke = self._fix_guild_before_invoke
             bot._menu_before_invoke_added = True
-            print(f"[MENU DEBUG] Added before_invoke hook to bot")
 
     async def _fix_guild_before_invoke(self, ctx):
         """Fix guild=None in contexts before command invocation."""
         if ctx.guild is None:
-            print(f"[MENU DEBUG] before_invoke: ctx.guild is None, fixing to {self.bot.modmail_guild}")
             ctx.guild = self.bot.modmail_guild
             if ctx.message:
                 ctx.message.guild = self.bot.modmail_guild
-        else:
-            print(f"[MENU DEBUG] before_invoke: ctx.guild is {ctx.guild}")
 
     # ----- helpers -----------------------------------------------------
 
@@ -539,27 +534,22 @@ class ThreadMenu(commands.Cog):
         commands. We use `"run_command"` (not `"command"`) as the stored
         type so core's own built-in invocation never fires for these too.
         """
-        print(f"[MENU DEBUG] on_thread_ready called for thread: {thread.id if hasattr(thread, 'id') else 'unknown'}")
-        
-        # Try to find the menu option attribute
         option = getattr(thread, "_selected_thread_creation_menu_option", None)
-        print(f"[MENU DEBUG] option from thread._selected_thread_creation_menu_option = {option}")
-        
         if not isinstance(option, dict):
-            print(f"[MENU DEBUG] option is not a dict, returning")
             return
-            
+
         if option.get("type") != "run_command":
-            print(f"[MENU DEBUG] option type is '{option.get('type')}', not 'run_command', returning")
             return
 
         alias = option.get("callback")
-        print(f"[MENU DEBUG] callback/alias = {alias}")
-        if alias:
-            print(f"[MENU DEBUG] invoking menu command: {alias}")
-            await self.run_menu_command(thread, alias, initial_message)
-        else:
-            print(f"[MENU DEBUG] no callback set on option")
+        if not isinstance(alias, str) or not alias.strip():
+            await thread.channel.send(embed=discord.Embed(
+                color=self.bot.error_color,
+                description="This menu option has no valid command configured.",
+            ))
+            return
+
+        await self.run_menu_command(thread, alias, initial_message)
 
     def resolve_command(self, alias):
         """Find the deepest (sub)command matching the start of `alias`.
@@ -568,47 +558,41 @@ class ThreadMenu(commands.Cog):
         this matches the `permission` subcommand of the `team` group rather
         than just `team`. Returns a `(command, remaining_args)` tuple.
         """
-        print(f"[MENU DEBUG] resolve_command called with alias: {alias}")
         words = alias.split()
         for i in range(len(words), 0, -1):
             command_name = " ".join(words[:i])
             command = self.bot.get_command(command_name)
-            print(f"[MENU DEBUG] trying to resolve '{command_name}' -> {command}")
             if command is not None:
                 remaining = " ".join(words[i:])
-                print(f"[MENU DEBUG] found command: {command}, remaining: {remaining}")
                 return command, remaining
-        print(f"[MENU DEBUG] no command found for alias: {alias}")
         return None, alias
 
     async def run_menu_command(self, thread, alias, source_message):
-        print(f"[MENU DEBUG] run_menu_command called with alias: {alias}")
         if source_message is None:
-            print(f"[MENU DEBUG] source_message is None, returning")
+            await thread.channel.send(embed=discord.Embed(
+                color=self.bot.error_color,
+                description=f"Menu command `{alias}` could not run because the initial message is unavailable.",
+            ))
             return
 
         command, remaining = self.resolve_command(alias)
         if command is None:
-            print(f"[MENU DEBUG] command is None, sending error message")
             await thread.channel.send(embed=discord.Embed(
                 color=self.bot.error_color,
                 description=f"Menu command `{alias}` doesn't match any registered command.",
             ))
             return
 
-        print(f"[MENU DEBUG] resolved command: {command}, remaining: {remaining}")
         from discord.ext.commands.view import StringView
 
         from core.models import DummyMessage
 
         try:
-            print(f"[MENU DEBUG] creating synthetic message and context")
             synthetic = DummyMessage(copy.copy(source_message))
             synthetic.author = self.bot.modmail_guild.me or self.bot.user
             synthetic.channel = thread.channel
-            synthetic.guild = self.bot.modmail_guild  # Use bot's modmail guild, not thread's guild
+            synthetic.guild = self.bot.modmail_guild
             synthetic.content = alias
-            print(f"[MENU DEBUG] synthetic message created, guild: {synthetic.guild}")
 
             ctx = commands.Context(
                 bot=self.bot,
@@ -619,18 +603,10 @@ class ThreadMenu(commands.Cog):
             ctx.command = command
             ctx.invoked_with = command.qualified_name
             ctx.thread = thread
-            # Explicitly set guild to the modmail guild
             ctx.guild = self.bot.modmail_guild
-            print(f"[MENU DEBUG] context created, guild: {ctx.guild}, invoking command: {command.qualified_name}")
 
-            # Invoke command directly without temporarily clearing checks.
-            # This avoids threading issues and properly respects all decorators.
             await command.invoke(ctx)
-            print(f"[MENU DEBUG] command invoked successfully")
         except Exception as exc:
-            print(f"[MENU DEBUG] exception caught: {type(exc).__name__}: {exc}")
-            import traceback
-            traceback.print_exc()
             error_msg = str(exc) if str(exc) else type(exc).__name__
             await thread.channel.send(embed=discord.Embed(
                 color=self.bot.error_color,
