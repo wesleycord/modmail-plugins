@@ -10,19 +10,17 @@ from core.models import PermissionLevel
 
 from . import team_helpers
 from . import team_service
-from .team_logs import TeamLogCallbacks
 
 
 class Teams(commands.Cog):
     """Move threads to configurable teams instead of raw categories."""
 
-    def __init__(self, bot, old_move=None, old_contact=None, old_logs_callbacks=None):
+    def __init__(self, bot, old_move=None, old_contact=None):
         self.bot = bot
         self.coll = bot.plugin_db.get_partition(self)
         self.teams = {}
         self._old_move = old_move
         self._old_contact = old_contact
-        self._old_logs_callbacks = old_logs_callbacks or {}
 
     async def cog_load(self):
         await team_service.load_teams(self)
@@ -36,12 +34,20 @@ class Teams(commands.Cog):
         if self._old_contact is not None:
             self.bot.add_command(self._old_contact)
 
-        logs = self.bot.get_command("logs")
-        if logs is not None:
-            for name, callback in self._old_logs_callbacks.items():
-                command = logs if name is None else logs.get_command(name)
-                if command is not None:
-                    command.callback = callback
+    async def can_view_log(self, author, log):
+        """Return whether ``author`` may view ``log`` for its assigned team."""
+        team_name = log.get("team")
+        team = team_helpers.find_team_exact(self.teams, team_name) if team_name else None
+        if team is None:
+            return True
+
+        allowed_targets = set(team.get("log_access", []))
+        if not allowed_targets or await self.bot.is_owner(author):
+            return True
+
+        author_targets = {f"user:{author.id}"}
+        author_targets.update(f"role:{role.id}" for role in getattr(author, "roles", ()))
+        return not allowed_targets.isdisjoint(author_targets)
 
     # ----- team management ----------------------------------------------
 
@@ -587,21 +593,4 @@ class Teams(commands.Cog):
 async def setup(bot):
     old_move = bot.remove_command("move")
     old_contact = bot.remove_command("contact")
-    logs = bot.get_command("logs")
-    old_logs_callbacks = {}
-    if logs is not None:
-        old_logs_callbacks[None] = logs.callback
-        logs.callback = TeamLogCallbacks.logs
-        callbacks = {
-            "closed-by": TeamLogCallbacks.closed_by,
-            "key": TeamLogCallbacks.key,
-            "responded": TeamLogCallbacks.responded,
-            "search": TeamLogCallbacks.search,
-        }
-        for name, callback in callbacks.items():
-            command = logs.get_command(name)
-            if command is not None:
-                old_logs_callbacks[name] = command.callback
-                command.callback = callback
-
-    await bot.add_cog(Teams(bot, old_move, old_contact, old_logs_callbacks))
+    await bot.add_cog(Teams(bot, old_move, old_contact))
