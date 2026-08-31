@@ -511,6 +511,91 @@ class Teams(commands.Cog):
 
     # ----- move override -------------------------------------------------
 
+    async def apply_team(self, thread, team, *, guild, reason):
+        """Move `thread`'s channel into `team`'s category and apply its settings.
+
+        Returns an error message string on failure, or `None` on success.
+        Shared by the `move` command, `contact`, and the thread-creation menu
+        hook, so all three stay in sync with each other.
+        """
+        category = guild.get_channel(team["category_id"]) if team["category_id"] else None
+        if not isinstance(category, discord.CategoryChannel):
+            return (
+                f"Team `{team['name']}` does not have a valid category set. "
+                f"Use `{self.bot.prefix}team category` to configure it."
+            )
+
+        await thread.channel.edit(
+            category=category,
+            sync_permissions=team.get("sync_permissions", True),
+            reason=reason,
+        )
+
+        for key, perms in team["permissions"].items():
+            target = self.resolve_permission_target(guild, key)
+            if target is None:
+                continue
+            overwrite = discord.PermissionOverwrite(**perms)
+            await thread.channel.set_permissions(
+                target, overwrite=overwrite, reason="Team permissions."
+            )
+
+        if team["pings"]:
+            mentions = []
+            for ping in team["pings"]:
+                if ping["type"] == "role":
+                    role = guild.get_role(ping["id"])
+                    if role:
+                        mentions.append(role.mention)
+                else:
+                    mentions.append(f"<@{ping['id']}>")
+            if mentions:
+                await thread.channel.send(
+                    " ".join(mentions),
+                    allowed_mentions=discord.AllowedMentions(roles=True, users=True),
+                )
+
+        if team["note"]:
+            await thread.channel.send(embed=discord.Embed(
+                title="Staff Note",
+                description=team["note"],
+                color=self.bot.mod_color,
+            ))
+
+        if team["response"]:
+            await thread.recipient.send(embed=discord.Embed(
+                title=self.bot.config["thread_move_title"],
+                description=team["response"],
+                color=self.bot.main_color,
+            ))
+
+        return None
+
+    @commands.Cog.listener()
+    async def on_thread_ready(self, thread, creator, category, initial_message):
+        """Apply a team linked to a thread-creation menu option (set via the
+        `menu` plugin's `menu option team` command), bypassing core's fragile
+        alias-based command invocation for menu options entirely.
+        """
+        option = getattr(thread, "_selected_thread_creation_menu_option", None)
+        if not isinstance(option, dict):
+            return
+
+        team_name = option.get("team")
+        if not team_name:
+            return
+
+        team = self.find_team(team_name)
+        if not team:
+            return
+
+        await self.apply_team(
+            thread,
+            team,
+            guild=self.bot.modmail_guild,
+            reason=f"Menu option {option.get('label')} selected.",
+        )
+
     @commands.command(usage="<team name>")
     @checks.has_permissions(PermissionLevel.MODERATOR)
     @checks.thread_only()
@@ -531,68 +616,21 @@ class Teams(commands.Cog):
                 ),
             ))
 
-        category = (
-            ctx.guild.get_channel(team["category_id"]) if team["category_id"] else None
-        )
-        if not isinstance(category, discord.CategoryChannel):
-            return await ctx.send(embed=discord.Embed(
-                color=self.bot.error_color,
-                description=(
-                    f"Team `{team['name']}` does not have a valid category set. "
-                    f"Use `{ctx.prefix}team category` to configure it."
-                ),
-            ))
-
-        thread = ctx.thread
-
-        await thread.channel.edit(
-            category=category,
-            sync_permissions=team.get("sync_permissions", True),
+        error = await self.apply_team(
+            ctx.thread,
+            team,
+            guild=ctx.guild,
             reason=f"{ctx.author} moved this thread to team {team['name']}.",
         )
-
-        for key, perms in team["permissions"].items():
-            target = self.resolve_permission_target(ctx.guild, key)
-            if target is None:
-                continue
-            overwrite = discord.PermissionOverwrite(**perms)
-            await thread.channel.set_permissions(
-                target, overwrite=overwrite, reason="Team move permissions."
-            )
-
-        if team["pings"]:
-            mentions = []
-            for ping in team["pings"]:
-                if ping["type"] == "role":
-                    role = ctx.guild.get_role(ping["id"])
-                    if role:
-                        mentions.append(role.mention)
-                else:
-                    mentions.append(f"<@{ping['id']}>")
-            if mentions:
-                await ctx.channel.send(
-                    " ".join(mentions),
-                    allowed_mentions=discord.AllowedMentions(roles=True, users=True),
-                )
+        if error:
+            return await ctx.send(embed=discord.Embed(
+                color=self.bot.error_color, description=error,
+            ))
 
         await ctx.channel.send(embed=discord.Embed(
             color=self.bot.main_color,
             description=f"Thread moved to team **{team['name']}**.",
         ))
-
-        if team["note"]:
-            await ctx.channel.send(embed=discord.Embed(
-                title="Staff Note",
-                description=team["note"],
-                color=self.bot.mod_color,
-            ))
-
-        if team["response"]:
-            await thread.recipient.send(embed=discord.Embed(
-                title=self.bot.config["thread_move_title"],
-                description=team["response"],
-                color=self.bot.main_color,
-            ))
 
         sent_emoji, _ = await self.bot.retrieve_emoji()
         await self.bot.add_reaction(ctx.message, sent_emoji)

@@ -1,3 +1,5 @@
+import copy
+
 import discord
 from discord.ext import commands
 
@@ -63,8 +65,11 @@ class ThreadMenu(commands.Cog):
             name="Category", value=category.mention if category else "Default", inline=False
         )
 
-        if option.get("type") == "command":
+        if option.get("type") == "run_command":
             embed.add_field(name="Runs Command", value=f"`{option.get('callback')}`", inline=False)
+
+        if option.get("team"):
+            embed.add_field(name="Linked Team", value=f"`{option['team']}`", inline=False)
 
         return embed
 
@@ -307,6 +312,7 @@ class ThreadMenu(commands.Cog):
             "category_id": None,
             "type": "message",
             "callback": None,
+            "team": None,
         }
         await self.save_options(options)
         await ctx.send(embed=discord.Embed(
@@ -423,6 +429,10 @@ class ThreadMenu(commands.Cog):
         Identify the option by its `key` (see `{prefix}menu option list`) to
         avoid needing to quote multi-word labels. Leave `alias` empty to make
         this option relay the message normally.
+
+        `alias` is resolved through discord.py's normal command pipeline
+        (not core's built-in menu, which can miss overridden commands), so
+        it works with any registered command, including plugin overrides.
         """
         options = self.get_options()
         key = self.find_option(options, key_or_label)
@@ -433,7 +443,7 @@ class ThreadMenu(commands.Cog):
             ))
 
         if alias:
-            options[key]["type"] = "command"
+            options[key]["type"] = "run_command"
             options[key]["callback"] = alias
         else:
             options[key]["type"] = "message"
@@ -447,6 +457,87 @@ class ThreadMenu(commands.Cog):
                 else f"`{options[key]['label']}` now relays the message normally."
             ),
         ))
+
+    @menu_option.command(name="team")
+    @checks.has_permissions(PermissionLevel.ADMINISTRATOR)
+    async def menu_option_team(self, ctx, key_or_label: str, *, team_name: str = None):
+        """Link a menu option directly to a Teams plugin team. Leave `team_name` empty to unlink.
+
+        Identify the option by its `key` (see `{prefix}menu option list`) to
+        avoid needing to quote multi-word labels. This applies the team's
+        category, permissions, mentions, and note as soon as the thread is
+        ready. Equivalent to `{prefix}menu option command <key> move <team>`,
+        just without needing to spell out the move command yourself.
+        """
+        options = self.get_options()
+        key = self.find_option(options, key_or_label)
+        if key is None:
+            return await ctx.send(embed=discord.Embed(
+                color=self.bot.error_color,
+                description=f"No option matching `{key_or_label}` exists.",
+            ))
+
+        if team_name:
+            teams_cog = self.bot.get_cog("Teams")
+            if teams_cog is None or not teams_cog.find_team(team_name):
+                return await ctx.send(embed=discord.Embed(
+                    color=self.bot.error_color,
+                    description=f"No team matching `{team_name}` exists.",
+                ))
+
+        options[key]["team"] = team_name or None
+        await self.save_options(options)
+        await ctx.send(embed=discord.Embed(
+            color=self.bot.main_color,
+            description=(
+                f"`{options[key]['label']}` now applies team `{team_name}` on creation."
+                if team_name
+                else f"`{options[key]['label']}` is no longer linked to a team."
+            ),
+        ))
+
+    # ----- reliable command invocation -----------------------------------
+
+    @commands.Cog.listener()
+    async def on_thread_ready(self, thread, creator, category, initial_message):
+        """Run a menu option's linked command through discord.py's normal
+        command-resolution pipeline (`bot.get_context`) instead of core's
+        manual Context construction, which can fail to resolve overridden
+        commands. We use `"run_command"` (not `"command"`) as the stored
+        type so core's own built-in invocation never fires for these too.
+        """
+        option = getattr(thread, "_selected_thread_creation_menu_option", None)
+        if not isinstance(option, dict) or option.get("type") != "run_command":
+            return
+
+        alias = option.get("callback")
+        if alias:
+            await self.run_menu_command(thread, alias, initial_message)
+
+    async def run_menu_command(self, thread, alias, source_message):
+        if source_message is None:
+            return
+
+        from core.models import DummyMessage
+
+        synthetic = DummyMessage(copy.copy(source_message))
+        synthetic.author = self.bot.modmail_guild.me or self.bot.user
+        synthetic.channel = thread.channel
+        synthetic.guild = thread.channel.guild
+        synthetic.content = self.bot.prefix + alias
+
+        ctx = await self.bot.get_context(synthetic)
+        if ctx.command is None:
+            return
+
+        ctx.thread = thread
+
+        old_checks = list(ctx.command.checks)
+        ctx.command.checks = []
+        try:
+            await self.bot.invoke(ctx)
+        finally:
+            ctx.command.checks = old_checks
 
 
 async def setup(bot):
