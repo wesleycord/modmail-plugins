@@ -584,7 +584,7 @@ class ThreadMenu(commands.Cog):
             synthetic.channel = thread.channel
             synthetic.guild = thread.channel.guild
             synthetic.content = alias
-            print(f"[MENU DEBUG] synthetic message created")
+            print(f"[MENU DEBUG] synthetic message created, guild: {synthetic.guild}")
 
             ctx = commands.Context(
                 bot=self.bot,
@@ -595,7 +595,9 @@ class ThreadMenu(commands.Cog):
             ctx.command = command
             ctx.invoked_with = command.qualified_name
             ctx.thread = thread
-            print(f"[MENU DEBUG] context created, invoking command: {command.qualified_name}")
+            # Explicitly set guild to ensure it's available
+            ctx.guild = thread.channel.guild
+            print(f"[MENU DEBUG] context created, guild: {ctx.guild}, invoking command: {command.qualified_name}")
 
             # Invoke command directly without temporarily clearing checks.
             # This avoids threading issues and properly respects all decorators.
