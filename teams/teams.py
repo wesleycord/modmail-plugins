@@ -26,19 +26,35 @@ class Teams(commands.Cog):
 
     # ----- helpers -----------------------------------------------------
 
-    def find_team(self, name):
+    def find_team_exact(self, name):
         return self.teams.get(name.strip().lower())
+
+    def find_team(self, name):
+        """Find a team by exact name, or by a unique name prefix."""
+        candidate = name.strip().lower()
+        if not candidate:
+            return None
+
+        team = self.teams.get(candidate)
+        if team:
+            return team
+
+        matches = [t for key, t in self.teams.items() if key.startswith(candidate)]
+        if len(matches) == 1:
+            return matches[0]
+        return None
 
     def match_team(self, text):
         """Find a team at the start of `text`, trying the longest word match first.
 
         Returns a `(team, rest)` tuple, where `rest` is whatever followed the
-        matched team name. This allows multi-word team names to be used
-        without quoting them.
+        matched team name. Team names may be given in full, or as a prefix
+        that uniquely identifies one team, and multi-word names don't need
+        to be quoted.
         """
         words = text.split()
         for i in range(len(words), 0, -1):
-            team = self.teams.get(" ".join(words[:i]).lower())
+            team = self.find_team(" ".join(words[:i]))
             if team:
                 return team, " ".join(words[i:])
         return None, text
@@ -169,7 +185,7 @@ class Teams(commands.Cog):
     @checks.has_permissions(PermissionLevel.ADMINISTRATOR)
     async def team_create(self, ctx, *, name: str):
         """Create a new team."""
-        if self.find_team(name):
+        if self.find_team_exact(name):
             return await ctx.send(embed=discord.Embed(
                 color=self.bot.error_color,
                 description=f"A team named `{name}` already exists.",
@@ -235,6 +251,7 @@ class Teams(commands.Cog):
     async def team_category(self, ctx, *, arguments: str):
         """Set the category a team moves threads into.
 
+        Leave the category out to use the channel's current category.
         Example: `{prefix}team category Admin Team #admin-category`
         """
         team, rest = self.match_team(arguments)
@@ -245,18 +262,20 @@ class Teams(commands.Cog):
             ))
 
         if not rest:
-            return await ctx.send(embed=discord.Embed(
-                color=self.bot.error_color,
-                description="Provide a category.",
-            ))
-
-        try:
-            category = await commands.CategoryChannelConverter().convert(ctx, rest)
-        except commands.BadArgument:
-            return await ctx.send(embed=discord.Embed(
-                color=self.bot.error_color,
-                description=f"Could not find a category matching `{rest}`.",
-            ))
+            category = ctx.channel.category
+            if category is None:
+                return await ctx.send(embed=discord.Embed(
+                    color=self.bot.error_color,
+                    description="This channel has no category. Provide one explicitly.",
+                ))
+        else:
+            try:
+                category = await commands.CategoryChannelConverter().convert(ctx, rest)
+            except commands.BadArgument:
+                return await ctx.send(embed=discord.Embed(
+                    color=self.bot.error_color,
+                    description=f"Could not find a category matching `{rest}`.",
+                ))
 
         team["category_id"] = category.id
         await self.save_team(team)
