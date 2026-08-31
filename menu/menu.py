@@ -14,8 +14,8 @@ class ThreadMenu(commands.Cog):
     editing. Submenus aren't supported here, only flat options.
 
     Core only ever shows this menu for user-initiated DMs (it's skipped
-    whenever a staff member starts the thread, e.g. via `{prefix}contact`),
-    so this plugin doesn't need to touch `contact` at all.
+    whenever a staff member starts the thread, e.g. via the contact command),
+    so this plugin doesn't need to touch contact at all.
     """
 
     def __init__(self, bot):
