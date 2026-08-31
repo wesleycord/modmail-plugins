@@ -518,6 +518,13 @@ class Teams(commands.Cog):
         Shared by the `move` command, `contact`, and the thread-creation menu
         hook, so all three stay in sync with each other.
         """
+        guild = guild or self.bot.modmail_guild
+        if guild is None:
+            return (
+                "This action cannot continue because the thread is not associated "
+                "with a guild. Please retry from a server channel."
+            )
+
         if team["category_id"]:
             category = guild.get_channel(team["category_id"])
             if not isinstance(category, discord.CategoryChannel):
@@ -619,7 +626,7 @@ class Teams(commands.Cog):
         error = await self.apply_team(
             ctx.thread,
             team,
-            guild=ctx.guild,
+            guild=ctx.guild or self.bot.modmail_guild,
             reason=f"{ctx.author} moved this thread to team {team['name']}.",
         )
         if error:
@@ -684,7 +691,8 @@ class Teams(commands.Cog):
                     description=f"No team matching `{team_name}` exists.",
                 ))
 
-            category = ctx.guild.get_channel(team["category_id"]) if team["category_id"] else None
+            guild = ctx.guild or self.bot.modmail_guild
+            category = guild.get_channel(team["category_id"]) if team["category_id"] else None
             if team["category_id"] and not isinstance(category, discord.CategoryChannel):
                 return await ctx.send(embed=discord.Embed(
                     color=self.bot.error_color,
@@ -725,8 +733,9 @@ class Teams(commands.Cog):
         await thread.wait_until_ready()
 
         if team is not None:
+            guild = ctx.guild or self.bot.modmail_guild
             for key, perms in team["permissions"].items():
-                target = self.resolve_permission_target(ctx.guild, key)
+                target = self.resolve_permission_target(guild, key)
                 if target is None:
                     continue
                 overwrite = discord.PermissionOverwrite(**perms)
