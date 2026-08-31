@@ -308,9 +308,9 @@ class Teams(commands.Cog):
     @team.command(name="mentions", aliases=["mention", "ping"])
     @checks.has_permissions(PermissionLevel.ADMINISTRATOR)
     async def team_mentions(self, ctx, *, arguments: str):
-        """Add or remove a role/user to mention when a thread is moved to this team.
+        """Add or remove one or more roles/users to mention when a thread is moved to this team.
 
-        Example: `{prefix}team mentions Admin Team add @Admins`
+        Example: `{prefix}team mentions Admin Team add @Admins @Kewi 123456789012345678`
         """
         team, rest = self.match_team(arguments)
         if not team:
@@ -319,14 +319,14 @@ class Teams(commands.Cog):
                 description="No matching team found in that command.",
             ))
 
-        parts = rest.split(maxsplit=1)
+        parts = rest.split()
         if len(parts) < 2:
             return await ctx.send(embed=discord.Embed(
                 color=self.bot.error_color,
-                description="Provide an action (`add` or `remove`) and a role or user.",
+                description="Provide an action (`add` or `remove`) and at least one role or user.",
             ))
 
-        action, target_text = parts
+        action, *target_texts = parts
         action = action.lower()
         if action not in ("add", "remove"):
             return await ctx.send(embed=discord.Embed(
@@ -334,30 +334,44 @@ class Teams(commands.Cog):
                 description="`action` must be `add` or `remove`.",
             ))
 
-        target = await self.convert_role_member_user(ctx, target_text)
-        if target is None:
+        targets = []
+        not_found = []
+        for text in target_texts:
+            target = await self.convert_role_member_user(ctx, text)
+            if target is None:
+                not_found.append(text)
+            else:
+                targets.append(target)
+
+        if not targets:
             return await ctx.send(embed=discord.Embed(
                 color=self.bot.error_color,
-                description=f"Could not find a role or user matching `{target_text}`.",
+                description=f"Could not find a role or user matching: {', '.join(not_found)}",
             ))
 
-        mention_type = "role" if isinstance(target, discord.Role) else "user"
-        entry = {"type": mention_type, "id": target.id}
+        for target in targets:
+            mention_type = "role" if isinstance(target, discord.Role) else "user"
+            entry = {"type": mention_type, "id": target.id}
 
-        if action == "add":
-            if entry not in team["pings"]:
-                team["pings"].append(entry)
-        else:
-            team["pings"] = [
-                p for p in team["pings"] if not (p["type"] == mention_type and p["id"] == target.id)
-            ]
+            if action == "add":
+                if entry not in team["pings"]:
+                    team["pings"].append(entry)
+            else:
+                team["pings"] = [
+                    p for p in team["pings"] if not (p["type"] == mention_type and p["id"] == target.id)
+                ]
 
         await self.save_team(team)
-        await ctx.send(embed=discord.Embed(
-            color=self.bot.main_color,
-            description=f"{'Added' if action == 'add' else 'Removed'} {target.mention} "
-            f"{'to' if action == 'add' else 'from'} the mentions list for team `{team['name']}`.",
-        ))
+
+        description = (
+            f"{'Added' if action == 'add' else 'Removed'} "
+            f"{', '.join(t.mention for t in targets)} "
+            f"{'to' if action == 'add' else 'from'} the mentions list for team `{team['name']}`."
+        )
+        if not_found:
+            description += f"\nCould not find: {', '.join(not_found)}"
+
+        await ctx.send(embed=discord.Embed(color=self.bot.main_color, description=description))
 
     @team.command(name="response")
     @checks.has_permissions(PermissionLevel.ADMINISTRATOR)
