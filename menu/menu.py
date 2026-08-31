@@ -22,6 +22,19 @@ class ThreadMenu(commands.Cog):
 
     def __init__(self, bot):
         self.bot = bot
+        # Patch the bot's get_context method to fix guild=None in menu commands
+        self._original_get_context = bot.get_context
+        bot.get_context = self._patched_get_context
+
+    async def _patched_get_context(self, message, *, cls=None):
+        """Get context and fix guild=None for menu commands."""
+        ctx = await self._original_get_context(message, cls=cls)
+        if ctx.guild is None and message.guild is None:
+            # This is likely a menu command from core with no guild
+            # Set it to the modmail guild
+            ctx.guild = self.bot.modmail_guild
+            print(f"[MENU DEBUG] Fixed ctx.guild from None to {ctx.guild}")
+        return ctx
 
     # ----- helpers -----------------------------------------------------
 
@@ -516,47 +529,6 @@ class ThreadMenu(commands.Cog):
         ))
 
     # ----- reliable command invocation -----------------------------------
-
-    @commands.Cog.listener("on_command_error")
-    async def handle_menu_command_errors(self, ctx, error):
-        """Catch and retry commands run by Modmail core's menu system with proper context."""
-        print(f"[MENU DEBUG] handle_menu_command_errors called: {type(error).__name__}")
-        
-        # Only handle CommandInvokeErrors with AttributeError about guild
-        if not isinstance(error, commands.CommandInvokeError):
-            return
-        
-        if not isinstance(error.original, AttributeError):
-            return
-            
-        if "get_channel" not in str(error.original):
-            return
-        
-        print(f"[MENU DEBUG] detected guild=None issue in menu command, attempting retry")
-        
-        # Check if this is likely a menu context
-        if not hasattr(ctx, 'thread'):
-            print(f"[MENU DEBUG] no thread attribute, skipping retry")
-            return
-        
-        # Try to fix the context and retry
-        try:
-            print(f"[MENU DEBUG] fixing context guild to {self.bot.modmail_guild}")
-            ctx.guild = self.bot.modmail_guild
-            
-            if ctx.message:
-                ctx.message.guild = self.bot.modmail_guild
-            
-            # Retry the command
-            print(f"[MENU DEBUG] retrying command invoke")
-            await ctx.command.invoke(ctx)
-            print(f"[MENU DEBUG] retry succeeded")
-            # Don't re-raise since we handled it
-            return
-        except Exception as retry_error:
-            print(f"[MENU DEBUG] retry failed: {type(retry_error).__name__}: {retry_error}")
-            # If retry fails, let the original error propagate
-            raise error
 
     @commands.Cog.listener()
     async def on_thread_ready(self, thread, creator, category, initial_message):
