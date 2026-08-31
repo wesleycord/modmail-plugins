@@ -1,5 +1,8 @@
 """Database updates and Discord ticket changes performed by Teams commands."""
 
+import io
+from datetime import datetime
+
 import discord
 from core import thread as core_thread
 
@@ -58,10 +61,12 @@ def install_log_channel_override(cog):
         async def patched_close(self, *args, **kwargs):
             channel_id = self.channel.id if self.channel else None
             self.bot._team_log_channel_override = await _team_log_channel_id(cog, self)
+            self.bot._team_log_transcript_data = None
             try:
                 await _original_thread_close(self, *args, **kwargs)
             finally:
                 self.bot._team_log_channel_override = None
+                self.bot._team_log_transcript_data = None
                 if channel_id is not None:
                     _channel_team_cache.pop(channel_id, None)
 
@@ -73,11 +78,16 @@ def install_log_channel_override(cog):
 
         def patched_log_channel(bot_self):
             channel_id = getattr(bot_self, "_team_log_channel_override", None)
-            if channel_id:
-                channel = bot_self.get_channel(channel_id)
-                if channel is not None:
-                    return channel
-            return _original_log_channel_property.fget(bot_self)
+            channel = bot_self.get_channel(channel_id) if channel_id else None
+            if channel is None:
+                channel = _original_log_channel_property.fget(bot_self)
+            if channel is None:
+                return None
+
+            log_data = getattr(bot_self, "_team_log_transcript_data", None)
+            if log_data:
+                return _TranscriptChannelProxy(channel, log_data)
+            return channel
 
         bot_cls.log_channel = property(patched_log_channel)
 
@@ -120,6 +130,86 @@ async def _team_log_channel_id(cog, thread):
     return team.get("log_channel_id") if team else None
 
 
+# ----- plain-text transcript attachment ---------------------------------
+#
+# Attach a `Modmail-Log-<recipient>.txt` transcript alongside the embed core
+# posts to the log channel on thread close.
+
+_TYPE_TAGS = {
+    "thread_message": "SENT",
+    "anonymous": "ANON",
+    "note": "NOTE",
+    "internal": "SYSTEM",
+}
+
+
+class _TranscriptChannelProxy:
+    """Wraps a channel so its next `send` call also attaches a transcript file."""
+
+    def __init__(self, channel, log_data):
+        self._channel = channel
+        self._log_data = log_data
+
+    def __getattr__(self, name):
+        return getattr(self._channel, name)
+
+    async def send(self, *args, **kwargs):
+        kwargs.setdefault("file", build_transcript_file(self._log_data))
+        return await self._channel.send(*args, **kwargs)
+
+
+def _format_header_timestamp(value):
+    try:
+        return datetime.fromisoformat(value).strftime("%d %b %Y - %H:%M")
+    except (TypeError, ValueError):
+        return value or "Unknown"
+
+
+def _format_message_timestamp(value):
+    try:
+        return datetime.fromisoformat(value).strftime("%d/%m %H:%M")
+    except (TypeError, ValueError):
+        return ""
+
+
+def build_transcript_text(log_data):
+    divider = "─" * 50
+    recipient = log_data.get("recipient") or {}
+    creator = log_data.get("creator") or recipient
+    closer = log_data.get("closer") or {}
+
+    lines = [
+        f"Thread created at {_format_header_timestamp(log_data.get('created_at'))} UTC",
+        f"[{'M' if creator.get('mod') else 'R'}] {creator.get('name')} "
+        f"({creator.get('id')}) created a Modmail thread. ",
+        divider,
+    ]
+
+    for message in log_data.get("messages", []):
+        author = message.get("author") or {}
+        tag = _TYPE_TAGS.get(message.get("type"), "SENT")
+        role = "M" if author.get("mod") else "R"
+        timestamp = _format_message_timestamp(message.get("timestamp"))
+        lines.append(f"{timestamp} [{tag}] {role} {author.get('name')}: {message.get('content')}")
+
+    lines.append(divider)
+    if closer:
+        lines.append(
+            f"[{'M' if closer.get('mod') else 'R'}] {closer.get('name')} "
+            f"({closer.get('id')}) closed the Modmail thread. "
+        )
+    lines.append(f"Thread closed at {_format_header_timestamp(log_data.get('closed_at'))} UTC")
+
+    return "\n".join(lines) + "\n"
+
+
+def build_transcript_file(log_data):
+    recipient = log_data.get("recipient") or {}
+    filename = f"Modmail-Log-{recipient.get('name', 'unknown')}.txt"
+    buffer = io.BytesIO(build_transcript_text(log_data).encode("utf-8"))
+    return discord.File(buffer, filename=filename)
+
+
 # ----- per-team database logging status -------------------------------
 #
 # When a team's `log_status` is disabled, new ticket messages and the
@@ -154,8 +244,11 @@ def install_database_logging_override(cog):
         async def patched_post_log(self, channel_id, data):
             team = await _resolve_team_for_channel(cog, int(channel_id))
             if team is not None and not team.get("log_status", True):
+                self.bot._team_log_transcript_data = None
                 return None
-            return await _original_post_log(self, channel_id, data)
+            result = await _original_post_log(self, channel_id, data)
+            self.bot._team_log_transcript_data = result
+            return result
 
         api_cls.post_log = patched_post_log
 
