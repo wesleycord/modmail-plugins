@@ -517,6 +517,47 @@ class ThreadMenu(commands.Cog):
 
     # ----- reliable command invocation -----------------------------------
 
+    @commands.Cog.listener("on_command_error")
+    async def handle_menu_command_errors(self, ctx, error):
+        """Catch and retry commands run by Modmail core's menu system with proper context."""
+        print(f"[MENU DEBUG] handle_menu_command_errors called: {type(error).__name__}")
+        
+        # Only handle CommandInvokeErrors with AttributeError about guild
+        if not isinstance(error, commands.CommandInvokeError):
+            return
+        
+        if not isinstance(error.original, AttributeError):
+            return
+            
+        if "get_channel" not in str(error.original):
+            return
+        
+        print(f"[MENU DEBUG] detected guild=None issue in menu command, attempting retry")
+        
+        # Check if this is likely a menu context
+        if not hasattr(ctx, 'thread'):
+            print(f"[MENU DEBUG] no thread attribute, skipping retry")
+            return
+        
+        # Try to fix the context and retry
+        try:
+            print(f"[MENU DEBUG] fixing context guild to {self.bot.modmail_guild}")
+            ctx.guild = self.bot.modmail_guild
+            
+            if ctx.message:
+                ctx.message.guild = self.bot.modmail_guild
+            
+            # Retry the command
+            print(f"[MENU DEBUG] retrying command invoke")
+            await ctx.command.invoke(ctx)
+            print(f"[MENU DEBUG] retry succeeded")
+            # Don't re-raise since we handled it
+            return
+        except Exception as retry_error:
+            print(f"[MENU DEBUG] retry failed: {type(retry_error).__name__}: {retry_error}")
+            # If retry fails, let the original error propagate
+            raise error
+
     @commands.Cog.listener()
     async def on_thread_ready(self, thread, creator, category, initial_message):
         """Run a menu option's linked command ourselves, bypassing core's
@@ -524,18 +565,27 @@ class ThreadMenu(commands.Cog):
         commands. We use `"run_command"` (not `"command"`) as the stored
         type so core's own built-in invocation never fires for these too.
         """
-        print(f"[MENU DEBUG] on_thread_ready called")
+        print(f"[MENU DEBUG] on_thread_ready called for thread: {thread.id if hasattr(thread, 'id') else 'unknown'}")
+        
+        # Try to find the menu option attribute
         option = getattr(thread, "_selected_thread_creation_menu_option", None)
-        print(f"[MENU DEBUG] option = {option}")
-        if not isinstance(option, dict) or option.get("type") != "run_command":
-            print(f"[MENU DEBUG] option is not a run_command type, returning")
+        print(f"[MENU DEBUG] option from thread._selected_thread_creation_menu_option = {option}")
+        
+        if not isinstance(option, dict):
+            print(f"[MENU DEBUG] option is not a dict, returning")
+            return
+            
+        if option.get("type") != "run_command":
+            print(f"[MENU DEBUG] option type is '{option.get('type')}', not 'run_command', returning")
             return
 
         alias = option.get("callback")
-        print(f"[MENU DEBUG] alias = {alias}")
+        print(f"[MENU DEBUG] callback/alias = {alias}")
         if alias:
-            print(f"[MENU DEBUG] calling run_menu_command with alias: {alias}")
+            print(f"[MENU DEBUG] invoking menu command: {alias}")
             await self.run_menu_command(thread, alias, initial_message)
+        else:
+            print(f"[MENU DEBUG] no callback set on option")
 
     def resolve_command(self, alias):
         """Find the deepest (sub)command matching the start of `alias`.
@@ -582,7 +632,7 @@ class ThreadMenu(commands.Cog):
             synthetic = DummyMessage(copy.copy(source_message))
             synthetic.author = self.bot.modmail_guild.me or self.bot.user
             synthetic.channel = thread.channel
-            synthetic.guild = thread.channel.guild
+            synthetic.guild = self.bot.modmail_guild  # Use bot's modmail guild, not thread's guild
             synthetic.content = alias
             print(f"[MENU DEBUG] synthetic message created, guild: {synthetic.guild}")
 
@@ -595,8 +645,8 @@ class ThreadMenu(commands.Cog):
             ctx.command = command
             ctx.invoked_with = command.qualified_name
             ctx.thread = thread
-            # Explicitly set guild to ensure it's available
-            ctx.guild = thread.channel.guild
+            # Explicitly set guild to the modmail guild
+            ctx.guild = self.bot.modmail_guild
             print(f"[MENU DEBUG] context created, guild: {ctx.guild}, invoking command: {command.qualified_name}")
 
             # Invoke command directly without temporarily clearing checks.
@@ -605,6 +655,8 @@ class ThreadMenu(commands.Cog):
             print(f"[MENU DEBUG] command invoked successfully")
         except Exception as exc:
             print(f"[MENU DEBUG] exception caught: {type(exc).__name__}: {exc}")
+            import traceback
+            traceback.print_exc()
             error_msg = str(exc) if str(exc) else type(exc).__name__
             await thread.channel.send(embed=discord.Embed(
                 color=self.bot.error_color,
