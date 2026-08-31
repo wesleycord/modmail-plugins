@@ -698,21 +698,6 @@ class Teams(commands.Cog):
                     target, overwrite=overwrite, reason="Team contact permissions."
                 )
 
-            if team["pings"]:
-                mentions = []
-                for ping in team["pings"]:
-                    if ping["type"] == "role":
-                        role = ctx.guild.get_role(ping["id"])
-                        if role:
-                            mentions.append(role.mention)
-                    else:
-                        mentions.append(f"<@{ping['id']}>")
-                if mentions:
-                    await thread.channel.send(
-                        " ".join(mentions),
-                        allowed_mentions=discord.AllowedMentions(roles=True, users=True),
-                    )
-
             if team["note"]:
                 await thread.channel.send(embed=discord.Embed(
                     title="Staff Note",
