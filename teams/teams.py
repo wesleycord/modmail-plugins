@@ -518,11 +518,19 @@ class Teams(commands.Cog):
     # ----- move override -------------------------------------------------
 
     async def apply_permissions(self, thread, team, guild, reason):
+        """Apply a team's overwrites to its thread channel only.
+
+        When the channel was synced while moving, its existing overwrites are
+        the destination category's base. Updating the existing overwrite keeps
+        those values intact and never changes the category itself.
+        """
         for key, perms in team["permissions"].items():
             target = self.resolve_permission_target(guild, key)
             if target is None:
                 continue
-            overwrite = discord.PermissionOverwrite(**perms)
+            overwrite = thread.channel.overwrites_for(target)
+            for permission, value in perms.items():
+                setattr(overwrite, permission, value)
             await thread.channel.set_permissions(
                 target, overwrite=overwrite, reason=reason
             )
@@ -554,6 +562,8 @@ class Teams(commands.Cog):
                 reason=reason,
             )
 
+        # This changes the thread channel only. With syncing enabled above,
+        # category overwrites are already the channel's base permissions.
         await self.apply_permissions(thread, team, guild, "Team permissions.")
 
         if team["pings"]:
