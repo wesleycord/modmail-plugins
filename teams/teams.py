@@ -10,19 +10,15 @@ from core.models import PermissionLevel
 class Teams(commands.Cog):
     """Move threads to configurable teams instead of raw categories."""
 
-    def __init__(self, bot):
+    def __init__(self, bot, old_move=None):
         self.bot = bot
         self.coll = bot.plugin_db.get_partition(self)
         self.teams = {}
-        self._old_move = None
+        self._old_move = old_move
 
     async def cog_load(self):
         async for doc in self.coll.find():
             self.teams[doc["_id"]] = doc
-
-        # Replace the built-in move command with our team-aware version.
-        self._old_move = self.bot.remove_command("move")
-        self.bot.add_command(self.move)
 
     def cog_unload(self):
         self.bot.remove_command("move")
@@ -445,4 +441,7 @@ class Teams(commands.Cog):
 
 
 async def setup(bot):
-    await bot.add_cog(Teams(bot))
+    # Remove the built-in move command first so our cog's own "move" command
+    # (added automatically when the cog is injected) doesn't collide with it.
+    old_move = bot.remove_command("move")
+    await bot.add_cog(Teams(bot, old_move))
